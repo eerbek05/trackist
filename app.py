@@ -2,8 +2,8 @@ from flask import Flask, render_template, request, session, redirect, jsonify, R
 from tools.weather import get_weather_by_coords, get_weather_for_airport
 from flask_session import Session
 from dotenv import load_dotenv
-from agent.motor import handle_message, handle_message_stream
-from tools.direct_query import get_flight_by_id
+from agent.motor import handle_message, handle_message_stream, get_history
+from tools.direct_query import get_flight_by_id, UTC_NOW_SQL
 from database.postgres import get_db
 from tools.statistics import get_airport_info
 import os
@@ -22,11 +22,13 @@ logging.basicConfig(
     ]
 )
 
+# error.log collects ERROR+ from every module (agent, tools, workers), not
+# just this one — hence the root logger.
 error_handler = logging.FileHandler('error.log')
 error_handler.setLevel(logging.ERROR)
+logging.getLogger().addHandler(error_handler)
 
 logger = logging.getLogger(__name__)
-logger.addHandler(error_handler)
 
 # Gereksiz DEBUG logları kapat
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -39,87 +41,68 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY")
 if not app.secret_key:
     raise RuntimeError("FLASK_SECRET_KEY is not set — add it to .env")
 app.config["SESSION_TYPE"] = "filesystem"
+# Boarding pass photos are the only upload — cap request size so an
+# arbitrarily large image can't be base64'd wholesale into memory.
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 Session(app)
+
+
+def _ensure_thread_id():
+    if "thread_id" not in session:
+        session["thread_id"] = str(uuid.uuid4())
+    return session["thread_id"]
+
+
+def _boarding_context(soru):
+    boarding = session.get("boarding_info")
+    if not boarding:
+        return soru
+    return (
+        f"[User's boarding pass info: flight={boarding.get('flight_code')}, "
+        f"seat={boarding.get('seat')}, gate={boarding.get('gate')}, "
+        f"departure={boarding.get('departure_time')}] " + soru
+    )
+
 
 @app.route("/")
 def index():
-    if "thread_id" not in session:
-        session["thread_id"] = str(uuid.uuid4())
-    if "history" not in session:
-        session["history"] = []
-    return render_template("index.html", history=session["history"])
+    thread_id = _ensure_thread_id()
+    # Chat history is rendered from the agent's own conversation memory —
+    # single source of truth, works for both /chat and /chat/stream.
+    return render_template("index.html", history=get_history(thread_id))
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if "thread_id" not in session:
-        session["thread_id"] = str(uuid.uuid4())
-    if "history" not in session:
-        session["history"] = []
+    thread_id = _ensure_thread_id()
 
-    soru = request.json.get("soru")
+    soru = ((request.json or {}).get("soru") or "").strip()
+    if not soru:
+        return jsonify({"error": "empty"}), 400
 
-    # Append boarding pass info to the question, if present
-    boarding = session.get("boarding_info")
-    if boarding:
-        boarding_context = f"[User's boarding pass info: flight={boarding.get('flight_code')}, seat={boarding.get('seat')}, gate={boarding.get('gate')}, departure={boarding.get('departure_time')}] "
-        soru_with_context = boarding_context + soru
-    else:
-        soru_with_context = soru
-
-    logger.info(f"Kullanıcı sorusu: {soru} | thread_id: {session['thread_id']}")
-    cevap = handle_message(soru_with_context, session["thread_id"])
+    logger.info(f"Kullanıcı sorusu: {soru} | thread_id: {thread_id}")
+    cevap = handle_message(_boarding_context(soru), thread_id)
     logger.info(f"Agent cevabı: {cevap[:200]}")
 
-    session["history"].append({"role": "user", "content": soru})
-    session["history"].append({"role": "assistant", "content": cevap})
-
-    if len(session["history"]) > 20:
-        session["history"] = session["history"][-20:]
-
-    session.modified = True
     return jsonify({"cevap": cevap})
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    if "thread_id" not in session:
-        session["thread_id"] = str(uuid.uuid4())
-    if "history" not in session:
-        session["history"] = []
+    thread_id = _ensure_thread_id()
 
-    soru = (request.json or {}).get("soru", "").strip()
+    soru = ((request.json or {}).get("soru") or "").strip()
     if not soru:
         return jsonify({"error": "empty"}), 400
 
-    boarding = session.get("boarding_info")
-    if boarding:
-        soru_ctx = (
-            f"[User's boarding pass info: flight={boarding.get('flight_code')}, "
-            f"seat={boarding.get('seat')}, gate={boarding.get('gate')}, "
-            f"departure={boarding.get('departure_time')}] " + soru
-        )
-    else:
-        soru_ctx = soru
-
-    thread_id = session["thread_id"]
-    history   = session["history"]
+    soru_ctx = _boarding_context(soru)
 
     @stream_with_context
     def generate():
         import json
-        tokens = []
         for event in handle_message_stream(soru_ctx, thread_id):
-            if event["type"] == "token":
-                tokens.append(event["text"])
             yield f"data: {json.dumps(event)}\n\n"
-
-        full_text = "".join(tokens)
-        history.append({"role": "user",      "content": soru})
-        history.append({"role": "assistant", "content": full_text})
-        if len(history) > 20:
-            history[:] = history[-20:]
-        session["history"] = history
-        session.modified = True
-
+        # History is persisted by the agent checkpointer during the run —
+        # no session writes here (they wouldn't survive: the session is
+        # saved before a streaming body is consumed).
         yield 'data: {"type":"done"}\n\n'
 
     resp = Response(generate(), mimetype="text/event-stream")
@@ -130,8 +113,7 @@ def chat_stream():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    if "thread_id" not in session:
-        session["thread_id"] = str(uuid.uuid4())
+    thread_id = _ensure_thread_id()
 
     file = request.files.get("image")
     if not file:
@@ -169,10 +151,10 @@ Görünmeyen alanlar için null yaz."""
 
     try:
         data = json.loads(raw)
-    except:
+    except json.JSONDecodeError:
         data = {"flight_code": raw}
 
-    flight_code = str(data.get("flight_code", "")).upper().replace(" ", "")
+    flight_code = str(data.get("flight_code") or "").upper().replace(" ", "")
     flight_code = re.sub(r'([A-Z]+)0+(\d+)', r'\1\2', flight_code)
     gate = data.get("gate")
     seat = data.get("seat")
@@ -189,8 +171,10 @@ Görünmeyen alanlar için null yaz."""
     }
     session.modified = True
 
-    # Use a dedicated thread so this auto-query doesn't pollute the user's chat history
-    cevap = handle_message(f"What is the current status, speed, and altitude of flight {flight_code}?", f"boarding-{session['thread_id']}")
+    # Run in the user's own thread so follow-up questions ("when does my
+    # flight land?", "what did you say its altitude was?") have this answer
+    # in the agent's conversation memory.
+    cevap = handle_message(f"What is the current status, speed, and altitude of flight {flight_code}?", thread_id)
 
     # Add seat and gate info
     extra = ""
@@ -206,16 +190,18 @@ Görünmeyen alanlar için null yaz."""
 @app.route("/api/flights")
 def api_flights():
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, speed_kmh,
-               altitude_ft, status, lat, lng, heading
-        FROM flights
-        WHERE lat IS NOT NULL AND lng IS NOT NULL
-          AND updated_at > NOW() - INTERVAL '121 minutes'
-    """)
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, from_airport, to_airport, speed_kmh,
+                   altitude_ft, status, lat, lng, heading
+            FROM flights
+            WHERE lat IS NOT NULL AND lng IS NOT NULL
+              AND updated_at > {UTC_NOW_SQL} - INTERVAL '121 minutes'
+        """)
+        rows = cur.fetchall()
+    finally:
+        conn.close()
 
     flights = [
         {
@@ -300,17 +286,19 @@ def ist_ground():
     """Return aircraft currently on the ground at IST from our own DB."""
     try:
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT flight_id, lat, lng, heading
-            FROM flights
-            WHERE status = 'landed'
-              AND lat BETWEEN 41.20 AND 41.33
-              AND lng BETWEEN 28.65 AND 28.85
-              AND updated_at > NOW() - INTERVAL '3 hours'
-        """)
-        rows = cur.fetchall()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"""
+                SELECT flight_id, lat, lng, heading
+                FROM flights
+                WHERE status = 'landed'
+                  AND lat BETWEEN 41.20 AND 41.33
+                  AND lng BETWEEN 28.65 AND 28.85
+                  AND updated_at > {UTC_NOW_SQL} - INTERVAL '3 hours'
+            """)
+            rows = cur.fetchall()
+        finally:
+            conn.close()
         return jsonify([
             {"callsign": r[0], "lat": r[1], "lng": r[2], "heading": int(r[3]) if r[3] else 0}
             for r in rows

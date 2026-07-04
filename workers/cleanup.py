@@ -8,45 +8,52 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.postgres import get_db
-from tools.direct_query import STALE_AFTER
+from tools.direct_query import STALE_AFTER, UTC_NOW_SQL
 from tools.opensky import fetch_opensky_states, check_landed_status
 from workers.term import ok, warn, info
 
 
-def get_stale_flight_ids():
+def get_stale_flights():
+    """(flight_id, flight_icao) pairs — flight_icao lets us match OpenSky
+    callsigns for any airline, not just the ones in the static IATA→ICAO
+    table."""
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT flight_id FROM flights WHERE updated_at < NOW() - %s",
-        (STALE_AFTER,)
-    )
-    ids = [row[0] for row in cur.fetchall()]
-    conn.close()
-    return ids
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT flight_id, flight_icao FROM flights WHERE updated_at < {UTC_NOW_SQL} - %s",
+            (STALE_AFTER,)
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return rows
 
 
 def delete_flight(flight_id):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM flights WHERE flight_id = %s", (flight_id,))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM flights WHERE flight_id = %s", (flight_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def run_cleanup_pass():
-    stale_ids = get_stale_flight_ids()
-    if not stale_ids:
+    stale = get_stale_flights()
+    if not stale:
         info("cleanup", "No stale flights")
         return
 
-    info("cleanup", f"{len(stale_ids)} stale flights — checking OpenSky...")
+    info("cleanup", f"{len(stale)} stale flights — checking OpenSky...")
     states = fetch_opensky_states()
     if states is None:
         warn("cleanup", "Could not reach OpenSky — skipping")
         return
 
-    for flight_id in stale_ids:
-        status = check_landed_status(flight_id, states)
+    for flight_id, flight_icao in stale:
+        status = check_landed_status(flight_id, states, callsign=flight_icao)
         if status == "landed":
             delete_flight(flight_id)
             ok("cleanup", f"{flight_id}  confirmed on ground → removed")

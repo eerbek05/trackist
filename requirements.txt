@@ -7,8 +7,25 @@ groq==0.37.1
 langchain-cohere==0.4.6
 langchain-core==0.3.86
 langchain-groq==0.3.8
+# Gemini Flash — primary free-tier provider (optional: skipped without GOOGLE_API_KEY)
+langchain-google-genai>=2.0,<3
+# Cerebras (OpenAI-compatible, 1M free tokens/day) and Mistral (free Experiment
+# plan) — optional chain members, skipped without their API keys.
+# <0.4/<0.3 pins keep them on langchain-core 0.3 — newer majors drag core to
+# 1.x and break langchain-cohere.
+langchain-openai>=0.3,<0.4
+langchain-mistralai>=0.2,<0.3
 langgraph==0.6.11
+# Persistent conversation memory (PostgresSaver); the agent falls back to
+# in-memory MemorySaver if these are missing.
+langgraph-checkpoint-postgres>=2.0.15,<3
+psycopg[binary]>=3.1,<4
+psycopg-pool>=3.2,<4
 geopy==2.4.1
+# Airport-local time conversion done in code (never by the LLM).
+# tzdata: zoneinfo's timezone database — not guaranteed in slim containers.
+timezonefinder>=6.5,<7
+tzdata
 pandas==2.3.3
 requests==2.32.5
 pytest==8.3.4

@@ -111,12 +111,16 @@ def fetch_opensky_states():
         return None
 
 
-def check_landed_status(flight_id, states):
+def check_landed_status(flight_id, states, callsign=None):
     """Returns "landed", "airborne", or "unknown" (not found in OpenSky's
     current snapshot, or no states available — ambiguous, not evidence of
     anything; a flight can be missing just because it's outside ADS-B
-    receiver coverage)."""
-    callsign = iata_flight_to_icao_callsign(flight_id)
+    receiver coverage).
+
+    callsign: the ICAO callsign if already known (e.g. the flight_icao
+    column AirLabs provides) — covers every airline, unlike the static
+    IATA_TO_ICAO_AIRLINE fallback table."""
+    callsign = callsign or iata_flight_to_icao_callsign(flight_id)
     if not callsign or states is None:
         return "unknown"
 

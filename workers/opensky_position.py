@@ -32,10 +32,12 @@ POLL_INTERVAL = 60
 
 def get_active_flights():
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT flight_id, flight_icao FROM flights WHERE flight_icao IS NOT NULL")
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT flight_id, flight_icao FROM flights WHERE flight_icao IS NOT NULL")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 
@@ -53,46 +55,50 @@ def update_positions(states):
     updated = 0
 
     conn = get_db()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    for flight_id, flight_icao in flights:
-        state = callsign_map.get(flight_icao)
-        if not state:
-            continue
+        for flight_id, flight_icao in flights:
+            state = callsign_map.get(flight_icao)
+            if not state:
+                continue
 
-        lng       = state[5]
-        lat       = state[6]
-        alt_m     = state[7]
-        on_ground = state[8]
-        vel_ms    = state[9]
-        track     = state[10]
+            lng       = state[5]
+            lat       = state[6]
+            alt_m     = state[7]
+            on_ground = state[8]
+            vel_ms    = state[9]
+            track     = state[10]
 
-        if on_ground:
+            if on_ground:
+                # updated_at must stay naive UTC to match the poller's writes
+                # — NOW() alone would be DB-session-local time.
+                cur.execute("""
+                    UPDATE flights SET status = 'landed', updated_at = (NOW() AT TIME ZONE 'UTC')
+                    WHERE flight_id = %s
+                """, (flight_id,))
+                updated += 1
+                continue
+
+            if lat is None or lng is None:
+                continue
+
+            alt_ft    = int(alt_m * 3.28084) if alt_m is not None else None
+            speed_kmh = int(vel_ms * 3.6)    if vel_ms is not None else None
+            heading   = int(track)            if track  is not None else None
+
             cur.execute("""
-                UPDATE flights SET status = 'landed', updated_at = NOW()
+                UPDATE flights
+                SET prev_altitude_ft = altitude_ft,
+                    lat = %s, lng = %s, altitude_ft = %s,
+                    speed_kmh = %s, heading = %s, updated_at = (NOW() AT TIME ZONE 'UTC')
                 WHERE flight_id = %s
-            """, (flight_id,))
+            """, (lat, lng, alt_ft, speed_kmh, heading, flight_id))
             updated += 1
-            continue
 
-        if lat is None or lng is None:
-            continue
-
-        alt_ft    = int(alt_m * 3.28084) if alt_m is not None else None
-        speed_kmh = int(vel_ms * 3.6)    if vel_ms is not None else None
-        heading   = int(track)            if track  is not None else None
-
-        cur.execute("""
-            UPDATE flights
-            SET prev_altitude_ft = altitude_ft,
-                lat = %s, lng = %s, altitude_ft = %s,
-                speed_kmh = %s, heading = %s, updated_at = NOW()
-            WHERE flight_id = %s
-        """, (lat, lng, alt_ft, speed_kmh, heading, flight_id))
-        updated += 1
-
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
     return updated
 
 

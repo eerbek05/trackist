@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 # Without this, Python block-buffers stdout when it isn't a tty (i.e.
 # always, inside a container) — `docker logs` on producer/consumer/cleanup

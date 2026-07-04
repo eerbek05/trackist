@@ -1,7 +1,7 @@
 import sys
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -11,11 +11,23 @@ STALE_MINUTES = 121
 STALE_AFTER   = timedelta(minutes=STALE_MINUTES)
 ACTIVE_WINDOW = f"{STALE_MINUTES} minutes"
 
+# updated_at is stored as naive UTC (the poller writes UTC timestamps).
+# NOW() returns the DB session's time zone, so every freshness filter must
+# compare in UTC explicitly — on a non-UTC server/DB the staleness window
+# would otherwise shift by hours and either hide live flights or flag
+# everything as stale.
+UTC_NOW_SQL = "(NOW() AT TIME ZONE 'UTC')"
+
+
+def utcnow():
+    """Naive UTC now — directly comparable to the naive-UTC updated_at column."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 def is_stale(updated_at, now=None):
     if not updated_at:
         return False
-    now = now or datetime.now()
+    now = now or utcnow()
     return now - updated_at > STALE_AFTER
 
 
@@ -30,18 +42,20 @@ def _fmt_time(dt_str):
 
 def get_flight_by_id(flight_id):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, speed_kmh,
-               altitude_ft, departure, arrival, aircraft, status, updated_at,
-               lat, lng, heading, prev_altitude_ft, v_speed_fpm,
-               dep_gate, arr_gate, dep_terminal, arr_terminal,
-               arr_baggage, dep_delayed, arr_delayed, dep_estimated, arr_estimated
-        FROM flights
-        WHERE flight_id = %s
-    """, (flight_id,))
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT flight_id, from_airport, to_airport, speed_kmh,
+                   altitude_ft, departure, arrival, aircraft, status, updated_at,
+                   lat, lng, heading, prev_altitude_ft, v_speed_fpm,
+                   dep_gate, arr_gate, dep_terminal, arr_terminal,
+                   arr_baggage, dep_delayed, arr_delayed, dep_estimated, arr_estimated
+            FROM flights
+            WHERE flight_id = %s
+        """, (flight_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
 
@@ -77,16 +91,18 @@ def get_flight_by_id(flight_id):
 
 def get_gate_and_terminal(flight_id: str) -> Optional[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport,
-               dep_gate, arr_gate, dep_terminal, arr_terminal,
-               dep_delayed, arr_delayed, arr_baggage,
-               departure, arrival, dep_estimated, arr_estimated, status
-        FROM flights WHERE flight_id = %s
-    """, (flight_id.upper(),))
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT flight_id, from_airport, to_airport,
+                   dep_gate, arr_gate, dep_terminal, arr_terminal,
+                   dep_delayed, arr_delayed, arr_baggage,
+                   departure, arrival, dep_estimated, arr_estimated, status
+            FROM flights WHERE flight_id = %s
+        """, (flight_id.upper(),))
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
 
@@ -113,14 +129,16 @@ def get_gate_and_terminal(flight_id: str) -> Optional[dict]:
 
 def get_baggage_claim(flight_id: str) -> Optional[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport,
-               arr_baggage, arr_gate, arr_estimated, status
-        FROM flights WHERE flight_id = %s
-    """, (flight_id.upper(),))
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT flight_id, from_airport, to_airport,
+                   arr_baggage, arr_gate, arr_estimated, status
+            FROM flights WHERE flight_id = %s
+        """, (flight_id.upper(),))
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
     return {
@@ -136,13 +154,15 @@ def get_baggage_claim(flight_id: str) -> Optional[dict]:
 
 def get_altitude_trend(flight_id: str) -> Optional[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, altitude_ft, prev_altitude_ft, v_speed_fpm, status
-        FROM flights WHERE flight_id = %s
-    """, (flight_id.upper(),))
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT flight_id, altitude_ft, prev_altitude_ft, v_speed_fpm, status
+            FROM flights WHERE flight_id = %s
+        """, (flight_id.upper(),))
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
 
@@ -184,15 +204,17 @@ def get_altitude_trend(flight_id: str) -> Optional[dict]:
 
 def get_scheduled_times(flight_id: str) -> Optional[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, status,
-               departure, arrival, dep_estimated, arr_estimated,
-               dep_delayed, arr_delayed
-        FROM flights WHERE flight_id = %s
-    """, (flight_id.upper(),))
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT flight_id, from_airport, to_airport, status,
+                   departure, arrival, dep_estimated, arr_estimated,
+                   dep_delayed, arr_delayed
+            FROM flights WHERE flight_id = %s
+        """, (flight_id.upper(),))
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
     return {
@@ -206,6 +228,12 @@ def get_scheduled_times(flight_id: str) -> Optional[dict]:
         "arr_estimated": _fmt_time(row[7]),
         "dep_delayed":   row[8],
         "arr_delayed":   row[9],
+        # Raw 'YYYY-MM-DD HH:MM' UTC strings — the chatbot tool layer converts
+        # these to airport-local time in code (the LLM must not do tz math).
+        "dep_scheduled_raw": row[4],
+        "arr_scheduled_raw": row[5],
+        "dep_estimated_raw": row[6],
+        "arr_estimated_raw": row[7],
     }
 
 
@@ -213,17 +241,19 @@ def get_scheduled_times(flight_id: str) -> Optional[dict]:
 
 def get_delayed_flights(min_delay: int = 1) -> List[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, status,
-               dep_delayed, arr_delayed, dep_estimated, arr_estimated
-        FROM flights
-        WHERE updated_at > NOW() - INTERVAL %s
-          AND (dep_delayed >= %s OR arr_delayed >= %s)
-        ORDER BY GREATEST(COALESCE(dep_delayed,0), COALESCE(arr_delayed,0)) DESC
-    """, (ACTIVE_WINDOW, min_delay, min_delay))
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, from_airport, to_airport, status,
+                   dep_delayed, arr_delayed, dep_estimated, arr_estimated
+            FROM flights
+            WHERE updated_at > {UTC_NOW_SQL} - INTERVAL %s
+              AND (dep_delayed >= %s OR arr_delayed >= %s)
+            ORDER BY GREATEST(COALESCE(dep_delayed,0), COALESCE(arr_delayed,0)) DESC
+        """, (ACTIVE_WINDOW, min_delay, min_delay))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "flight_id":   r[0],
@@ -242,17 +272,19 @@ def get_delayed_flights(min_delay: int = 1) -> List[dict]:
 
 def get_flights_by_status(status: str) -> List[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, status,
-               altitude_ft, speed_kmh, dep_estimated, arr_estimated
-        FROM flights
-        WHERE updated_at > NOW() - INTERVAL %s
-          AND LOWER(status) = LOWER(%s)
-        ORDER BY flight_id
-    """, (ACTIVE_WINDOW, status))
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, from_airport, to_airport, status,
+                   altitude_ft, speed_kmh, dep_estimated, arr_estimated
+            FROM flights
+            WHERE updated_at > {UTC_NOW_SQL} - INTERVAL %s
+              AND LOWER(status) = LOWER(%s)
+            ORDER BY flight_id
+        """, (ACTIVE_WINDOW, status))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "flight_id":   r[0],
@@ -270,18 +302,20 @@ def get_flights_by_status(status: str) -> List[dict]:
 
 def get_flights_arriving_ist() -> List[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, status,
-               arr_gate, arr_terminal, arr_baggage,
-               arr_delayed, dep_estimated, arr_estimated, altitude_ft
-        FROM flights
-        WHERE to_airport = 'IST'
-          AND updated_at > NOW() - INTERVAL %s
-        ORDER BY arr_estimated NULLS LAST, flight_id
-    """, (ACTIVE_WINDOW,))
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, from_airport, status,
+                   arr_gate, arr_terminal, arr_baggage,
+                   arr_delayed, dep_estimated, arr_estimated, altitude_ft
+            FROM flights
+            WHERE to_airport = 'IST'
+              AND updated_at > {UTC_NOW_SQL} - INTERVAL %s
+            ORDER BY arr_estimated NULLS LAST, flight_id
+        """, (ACTIVE_WINDOW,))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "flight_id":    r[0],
@@ -301,18 +335,20 @@ def get_flights_arriving_ist() -> List[dict]:
 
 def get_flights_departing_ist() -> List[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, to_airport, status,
-               dep_gate, dep_terminal, dep_delayed,
-               dep_estimated, arr_estimated, altitude_ft
-        FROM flights
-        WHERE from_airport = 'IST'
-          AND updated_at > NOW() - INTERVAL %s
-        ORDER BY dep_estimated NULLS LAST, flight_id
-    """, (ACTIVE_WINDOW,))
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, to_airport, status,
+                   dep_gate, dep_terminal, dep_delayed,
+                   dep_estimated, arr_estimated, altitude_ft
+            FROM flights
+            WHERE from_airport = 'IST'
+              AND updated_at > {UTC_NOW_SQL} - INTERVAL %s
+            ORDER BY dep_estimated NULLS LAST, flight_id
+        """, (ACTIVE_WINDOW,))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "flight_id":    r[0],
@@ -331,18 +367,20 @@ def get_flights_departing_ist() -> List[dict]:
 
 def get_flights_by_airline(airline_iata: str) -> List[dict]:
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT flight_id, from_airport, to_airport, status,
-               altitude_ft, speed_kmh, dep_delayed, arr_delayed,
-               dep_estimated, arr_estimated
-        FROM flights
-        WHERE flight_id LIKE %s
-          AND updated_at > NOW() - INTERVAL %s
-        ORDER BY flight_id
-    """, (f"{airline_iata.upper()}%", ACTIVE_WINDOW))
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT flight_id, from_airport, to_airport, status,
+                   altitude_ft, speed_kmh, dep_delayed, arr_delayed,
+                   dep_estimated, arr_estimated
+            FROM flights
+            WHERE flight_id LIKE %s
+              AND updated_at > {UTC_NOW_SQL} - INTERVAL %s
+            ORDER BY flight_id
+        """, (f"{airline_iata.upper()}%", ACTIVE_WINDOW))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "flight_id":   r[0],

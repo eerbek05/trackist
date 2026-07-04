@@ -11,10 +11,9 @@ calls:
    lat/lng-swap bug that silently broke every distance/ETA calculation
    until it was caught; also covers the airports this project actually
    uses (Istanbul's two airports, plus a few international ones).
-3. router.detect_complexity — the embedding model is multilingual but its
-   training examples are all Turkish, so it's worth locking in that
-   English questions still route correctly (first run loads/caches the
-   embedding model, ~5-10s; subsequent runs are fast).
+3. router.detect_complexity — regex/heuristic router; locks in that both
+   Turkish and English questions route correctly, including chain queries
+   (superlative selector + secondary attribute) that need the stronger LLM.
 4. direct_query.is_stale — a flight that drops out of AirLabs's live feed
    (e.g. it landed) just stops getting updated; this is the only signal
    that distinguishes "stale last-known position" from "live position".
@@ -202,6 +201,28 @@ def test_router_classifies_complex_questions_in_both_languages(detect_complexity
     assert detect_complexity(question) == "complex"
 
 
+@pytest.mark.parametrize("question", [
+    # A superlative *selector* plus a secondary attribute means one tool has
+    # to pick the flight and another answers the actual question — the
+    # flagship "chain query" shape from the product vision.
+    "IST'e gelen en yüksek uçağın kalkış şehrinde hava nasıl?",
+    "What's the weather in the departure city of the highest flight?",
+    "En hızlı uçak ne zaman iner?",
+    "En hızlı 5 uçuş hangileri?",   # regressed before: pattern had a literal \n
+])
+def test_router_classifies_chain_questions_as_complex(detect_complexity, question):
+    assert detect_complexity(question) == "complex"
+
+
+@pytest.mark.parametrize("question", [
+    "En yüksek uçak hangisi?",   # single superlative → single tool → simple
+    "TK12 nerede?",
+    "Which flight is the fastest?",
+])
+def test_router_single_tool_superlative_stays_simple(detect_complexity, question):
+    assert detect_complexity(question) == "simple"
+
+
 # ============================================================
 # direct_query.is_stale
 # ============================================================
@@ -236,6 +257,109 @@ def test_missing_updated_at_is_not_considered_stale():
     # No timestamp at all (e.g. a freshly-seeded row) shouldn't be flagged
     # stale — that's a different "we don't know" case, not "this is old".
     assert is_stale(None) is False
+
+
+def test_is_stale_default_clock_is_utc():
+    # updated_at is stored as naive UTC; the default "now" must be UTC too.
+    # With a local-time default, any machine ahead of UTC (e.g. Turkey,
+    # UTC+3) would flag every freshly-written row as hours old.
+    from tools.direct_query import utcnow
+    assert is_stale(utcnow() - timedelta(minutes=1)) is False
+    assert is_stale(utcnow() - STALE_AFTER - timedelta(minutes=1)) is True
+
+
+# ============================================================
+# statistics.get_route_completion — zero-remaining edge case
+# ============================================================
+
+from tools.statistics import get_route_completion
+
+
+@patch("tools.statistics.get_remaining_distance")
+@patch("tools.statistics.get_total_route_distance")
+def test_route_completion_zero_remaining_means_100_percent(mock_total, mock_remaining):
+    # 0 km remaining is a valid "arrived / on final" state, not a failed
+    # calculation — a falsy check here used to return None instead of 100%.
+    mock_total.return_value = 1500
+    mock_remaining.return_value = 0
+    r = get_route_completion("TK1", "IST", "JFK")
+    assert r is not None
+    assert r["yuzde"] == 100
+    assert r["kalan_km"] == 0
+
+
+@patch("tools.statistics.get_remaining_distance")
+@patch("tools.statistics.get_total_route_distance")
+def test_route_completion_failed_lookup_returns_none(mock_total, mock_remaining):
+    mock_total.return_value = 1500
+    mock_remaining.return_value = None
+    assert get_route_completion("TK1", "IST", "JFK") is None
+
+
+# ============================================================
+# agent.language — deterministic user-language detection
+# ============================================================
+
+from agent.language import detect_language
+
+
+@pytest.mark.parametrize("text", [
+    "TK12 nerede?",                      # Turkish keyword, no diacritics
+    "ucus ne zaman kalkiyor",            # ASCII-folded Turkish
+    "Uçağım hangi kapıdan kalkıyor?",    # Turkish characters
+    "bagaj bandi hangisi",
+    "kac ucus havada",
+])
+def test_detect_language_turkish(text):
+    assert detect_language(text) == "tr"
+
+
+@pytest.mark.parametrize("text", [
+    "Where is TK12?",
+    "The flight is en route to JFK",     # "en" must not trigger Turkish
+    "When does my flight land?",
+    "list delayed flights",
+    "TK12",                              # bare flight code defaults to English
+])
+def test_detect_language_english(text):
+    assert detect_language(text) == "en"
+
+
+# ============================================================
+# tools.tz — airport-local time conversion (code, not LLM)
+# ============================================================
+
+from tools.tz import parse_utc, utc_to_airport_local, fmt_utc_with_local, airport_timezone
+
+
+def test_airport_timezone_resolution():
+    assert airport_timezone("IST") == "Europe/Istanbul"
+    assert airport_timezone("JFK") == "America/New_York"
+    assert airport_timezone("ZZZ") is None
+
+
+def test_parse_utc():
+    dt = parse_utc("2026-07-04 18:55")
+    assert dt is not None and (dt.hour, dt.minute) == (18, 55)
+    assert parse_utc(None) is None
+    assert parse_utc("garbage") is None
+
+
+def test_utc_to_airport_local_istanbul_offset():
+    # Istanbul is UTC+3 year-round (no DST since 2016)
+    local = utc_to_airport_local(parse_utc("2026-07-04 10:00"), "IST")
+    assert (local.hour, local.minute) == (13, 0)
+
+
+def test_utc_to_airport_local_jfk_dst():
+    # July: New York is on EDT (UTC-4) — a hardcoded/LLM "UTC-5" would fail here
+    local = utc_to_airport_local(parse_utc("2026-07-04 18:55"), "JFK")
+    assert (local.hour, local.minute) == (14, 55)
+
+
+def test_fmt_utc_with_local_falls_back_to_utc_for_unknown_airport():
+    assert fmt_utc_with_local("2026-07-04 10:00", "ZZZ") == "10:00 UTC"
+    assert "13:00" in fmt_utc_with_local("2026-07-04 10:00", "IST")
 
 
 # ============================================================
