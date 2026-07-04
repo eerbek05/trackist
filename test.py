@@ -1,0 +1,554 @@
+"""
+Regression tests — run with: pytest test.py -v
+
+Four areas, all runnable without a live database, Kafka, or paid API
+calls:
+
+1. text_to_sql.validate_sql — the SQL-injection guard around the LLM-
+   generated queries. Covers case-insensitivity, word-boundary false
+   positives, and both Turkish- and English-language query content.
+2. statistics.get_airport_coords / get_airport_info — this had a real
+   lat/lng-swap bug that silently broke every distance/ETA calculation
+   until it was caught; also covers the airports this project actually
+   uses (Istanbul's two airports, plus a few international ones).
+3. router.detect_complexity — the embedding model is multilingual but its
+   training examples are all Turkish, so it's worth locking in that
+   English questions still route correctly (first run loads/caches the
+   embedding model, ~5-10s; subsequent runs are fast).
+4. direct_query.is_stale — a flight that drops out of AirLabs's live feed
+   (e.g. it landed) just stops getting updated; this is the only signal
+   that distinguishes "stale last-known position" from "live position".
+5. opensky.iata_flight_to_icao_callsign — the IATA→ICAO callsign mapping
+   used to cross-check stale flights against OpenSky before deleting them.
+"""
+
+from datetime import datetime, timedelta
+
+import pytest
+
+from tools.text_to_sql import validate_sql, UnsafeSQLError
+from tools.statistics import get_airport_coords, get_airport_info
+from tools.direct_query import is_stale, STALE_AFTER
+from tools.opensky import iata_flight_to_icao_callsign
+from unittest.mock import patch, MagicMock
+
+
+# ============================================================
+# text_to_sql.validate_sql
+# ============================================================
+
+def test_validate_sql_allows_plain_select():
+    sql = "SELECT * FROM flights WHERE to_airport = 'JFK';"
+    assert validate_sql(sql) == "SELECT * FROM flights WHERE to_airport = 'JFK'"
+
+
+def test_validate_sql_allows_select_without_trailing_semicolon():
+    sql = "SELECT flight_id FROM flights"
+    assert validate_sql(sql) == "SELECT flight_id FROM flights"
+
+
+@pytest.mark.parametrize("sql", [
+    "DROP TABLE flights;",
+    "DELETE FROM flights;",
+    "UPDATE flights SET status = 'Havada';",
+    "INSERT INTO flights (flight_id) VALUES ('X1');",
+    "ALTER TABLE flights ADD COLUMN hacked TEXT;",
+    "TRUNCATE flights;",
+    "GRANT ALL ON flights TO public;",
+])
+def test_validate_sql_rejects_non_select_statements(sql):
+    with pytest.raises(UnsafeSQLError):
+        validate_sql(sql)
+
+
+@pytest.mark.parametrize("sql", [
+    "drop table flights;",
+    "Drop Table flights;",
+    "DrOp TaBlE flights;",
+])
+def test_validate_sql_rejects_non_select_statements_case_insensitively(sql):
+    with pytest.raises(UnsafeSQLError):
+        validate_sql(sql)
+
+
+def test_validate_sql_rejects_chained_statements():
+    # A SELECT that *looks* safe but smuggles a second statement in.
+    sql = "SELECT * FROM flights; DROP TABLE flights;"
+    with pytest.raises(UnsafeSQLError):
+        validate_sql(sql)
+
+
+def test_validate_sql_rejects_select_into():
+    # SELECT ... INTO can create/overwrite a table — not a read-only query.
+    sql = "SELECT * INTO backup_flights FROM flights;"
+    with pytest.raises(UnsafeSQLError):
+        validate_sql(sql)
+
+
+def test_validate_sql_rejects_non_select_opening_statement():
+    with pytest.raises(UnsafeSQLError):
+        validate_sql("EXPLAIN SELECT * FROM flights;")
+
+
+@pytest.mark.parametrize("sql,expected_keyword", [
+    ("SELECT updated_at FROM flights;", None),
+    ("SELECT * FROM flights WHERE status = 'DELETE_REQUESTED';", None),
+    ("SELECT * FROM flights WHERE aircraft = 'Updated Livery';", None),
+])
+def test_validate_sql_does_not_false_positive_on_keyword_substrings(sql, expected_keyword):
+    # Column/value names that merely *contain* a forbidden word (updateD_at,
+    # DELETE_REQUESTED) must not trip the filter — only the word itself,
+    # on its own, should. A naive substring search would break all of these.
+    assert validate_sql(sql) is not None
+
+
+def test_validate_sql_allows_turkish_text_in_query():
+    sql = "SELECT * FROM flights WHERE status = 'Havada' AND from_airport = 'İstanbul (IST)';"
+    result = validate_sql(sql)
+    assert "Havada" in result
+    assert "İstanbul" in result
+
+
+def test_validate_sql_allows_english_text_in_query():
+    sql = "SELECT * FROM flights WHERE status = 'En-route' AND to_airport = 'New York (JFK)';"
+    result = validate_sql(sql)
+    assert "En-route" in result
+    assert "New York" in result
+
+
+@pytest.mark.parametrize("sql", [
+    "Bu bir SQL değil, sadece düz Türkçe metin.",
+    "This is not SQL, just plain English text.",
+])
+def test_validate_sql_rejects_non_sql_text(sql):
+    with pytest.raises(UnsafeSQLError):
+        validate_sql(sql)
+
+
+# ============================================================
+# statistics.get_airport_coords / get_airport_info
+# ============================================================
+
+@pytest.mark.parametrize("code,lat_range,lng_range", [
+    ("IST", (40, 42), (27, 30)),    # Istanbul Airport
+    ("SAW", (40, 41), (28, 30)),    # Istanbul Sabiha Gökçen
+    ("JFK", (39, 41), (-75, -72)),  # New York JFK (negative longitude)
+    ("LHR", (50, 52), (-1, 1)),     # London Heathrow
+    ("DXB", (24, 26), (54, 56)),    # Dubai
+])
+def test_airport_coords_are_not_swapped(code, lat_range, lng_range):
+    # Regression test: airports.csv stores "lat, lng", and the lookup once
+    # unpacked it backwards, silently swapping every coordinate it
+    # returned. These bounds would fail loudly if that regressed — e.g. a
+    # swapped IST would report lat≈28 (outside any valid latitude för this
+    # airport), not lat≈41.
+    lat, lng = get_airport_coords(code)
+    assert lat_range[0] < lat < lat_range[1]
+    assert lng_range[0] < lng < lng_range[1]
+
+
+def test_airport_coords_lookup_is_case_sensitive():
+    # Documents actual behavior: airports.csv stores codes uppercase, and
+    # the lookup does an exact match — "ist" does not find "IST".
+    assert get_airport_coords("ist") is None
+    assert get_airport_coords("IST") is not None
+
+
+def test_unknown_airport_code_returns_none():
+    assert get_airport_coords("ZZZ") is None
+
+
+def test_get_airport_info_includes_name_and_coords():
+    info = get_airport_info("IST")
+    assert info["iata_code"] == "IST"
+    assert "Istanbul" in info["name"] or "İstanbul" in info["name"]
+    assert 40 < info["lat"] < 42
+    assert 27 < info["lng"] < 30
+
+
+def test_get_airport_info_for_unknown_code_returns_none():
+    assert get_airport_info("ZZZ") is None
+
+
+# ============================================================
+# router.detect_complexity
+# ============================================================
+# Imported lazily (function-scoped) rather than at module level, so the
+# embedding-model load only happens if these tests actually run.
+
+@pytest.fixture(scope="module")
+def detect_complexity():
+    from agent.router import detect_complexity as _detect_complexity
+    return _detect_complexity
+
+
+@pytest.mark.parametrize("question", [
+    "TK3 hızı kaç?",
+    "Kaç uçuş havada?",
+    "What is the speed of TK3?",
+    "How many flights are airborne right now?",
+])
+def test_router_classifies_simple_questions_in_both_languages(detect_complexity, question):
+    assert detect_complexity(question) == "simple"
+
+
+@pytest.mark.parametrize("question", [
+    "TK3'ün hızı tüm uçuşların ortalamasından yüksek mi?",
+    "Boeing B77W kullanan uçuşların ortalama irtifası kaç?",
+    "Is TK3 faster than the average of all flights?",
+    "Compare the average altitude of B77W flights to A333 flights.",
+])
+def test_router_classifies_complex_questions_in_both_languages(detect_complexity, question):
+    assert detect_complexity(question) == "complex"
+
+
+# ============================================================
+# direct_query.is_stale
+# ============================================================
+
+def test_fresh_update_is_not_stale():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    updated_at = now - timedelta(seconds=30)
+    assert is_stale(updated_at, now=now) is False
+
+
+def test_update_right_at_the_threshold_is_not_yet_stale():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    updated_at = now - STALE_AFTER
+    assert is_stale(updated_at, now=now) is False
+
+
+def test_update_past_the_threshold_is_stale():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    updated_at = now - STALE_AFTER - timedelta(seconds=1)
+    assert is_stale(updated_at, now=now) is True
+
+
+def test_long_dropped_flight_is_stale():
+    # A flight that dropped off the live feed well past the STALE_AFTER
+    # window (currently 75 minutes) — definitely stale.
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    updated_at = now - STALE_AFTER - timedelta(minutes=30)
+    assert is_stale(updated_at, now=now) is True
+
+
+def test_missing_updated_at_is_not_considered_stale():
+    # No timestamp at all (e.g. a freshly-seeded row) shouldn't be flagged
+    # stale — that's a different "we don't know" case, not "this is old".
+    assert is_stale(None) is False
+
+
+# ============================================================
+# opensky.iata_flight_to_icao_callsign
+# ============================================================
+
+@pytest.mark.parametrize("flight_id,expected", [
+    ("TK2750", "THY2750"),
+    ("TK1", "THY1"),
+    ("PC401", "PGT401"),
+    ("tk2750", "THY2750"),       # case-insensitive
+    (" TK2750 ", "THY2750"),     # tolerates surrounding whitespace
+])
+def test_iata_flight_to_icao_callsign_known_airlines(flight_id, expected):
+    assert iata_flight_to_icao_callsign(flight_id) == expected
+
+
+@pytest.mark.parametrize("flight_id", [
+    "XX99",       # airline prefix we don't have a mapping for
+    "TK",         # no flight number at all
+    "",
+    None,
+    "TOOLONG123", # doesn't match the IATA flight-code shape
+])
+def test_iata_flight_to_icao_callsign_returns_none_when_unmappable(flight_id):
+    assert iata_flight_to_icao_callsign(flight_id) is None
+
+
+# ============================================================
+# tools.direct_query — all tests use mocked DB, no live connection needed
+# ============================================================
+
+from tools.direct_query import (
+    _fmt_time,
+    get_gate_and_terminal,
+    get_delayed_flights,
+    get_flights_by_status,
+    get_flights_arriving_ist,
+    get_flights_departing_ist,
+    get_baggage_claim,
+    get_flights_by_airline,
+    get_altitude_trend,
+    get_scheduled_times,
+)
+
+
+def _mock_db(rows):
+    """Return a get_db() mock whose cursor().fetchone/fetchall returns rows."""
+    cur = MagicMock()
+    cur.fetchone.return_value = rows[0] if rows else None
+    cur.fetchall.return_value = rows
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    return conn
+
+
+# ── _fmt_time ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    ("2026-07-01 14:12",    "14:12 UTC"),
+    ("2026-07-01 09:05",    "09:05 UTC"),
+    ("2026-07-01 14:12:00", "14:12 UTC"),
+    (None,                  None),
+    ("",                    None),
+])
+def test_fmt_time(raw, expected):
+    assert _fmt_time(raw) == expected
+
+
+# ── get_gate_and_terminal ──────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_gate_departing_from_ist(mock_get_db):
+    # dep_gate is B2, arr_gate is null — departing IST so gate = dep_gate
+    mock_get_db.return_value = _mock_db([
+        ("TK968", "IST", "ECN", "F6A", None, None, None, 7, None, None,
+         "", "", "2026-07-01 10:22", "2026-07-01 12:01", "en-route")
+    ])
+    r = get_gate_and_terminal("TK968")
+    assert r["gate"] == "F6A"
+    assert r["delay_min"] == 7
+    assert r["dep_time"] == "10:22 UTC"
+    assert r["arr_time"] == "12:01 UTC"
+
+
+@patch("tools.direct_query.get_db")
+def test_gate_arriving_at_ist(mock_get_db):
+    # arr_gate is 16, dep_gate null — arriving IST so gate = arr_gate
+    mock_get_db.return_value = _mock_db([
+        ("EK121", "DXB", "IST", None, "16", None, None, None, 5, "16",
+         "", "", "2026-07-01 09:48", "2026-07-01 14:18", "en-route")
+    ])
+    r = get_gate_and_terminal("EK121")
+    assert r["gate"] == "16"
+    assert r["arr_baggage"] == "16"
+    assert r["delay_min"] == 5
+
+
+@patch("tools.direct_query.get_db")
+def test_gate_unknown_flight_returns_none(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_gate_and_terminal("XX999") is None
+
+
+# ── get_delayed_flights ────────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_delayed_flights_sorted_by_worst_delay(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK1", "IST", "JFK", "en-route", 83, None, "2026-07-01 10:00", "2026-07-01 20:00"),
+        ("PC2", "IST", "AYT", "en-route", None, 30, "2026-07-01 11:00", "2026-07-01 12:00"),
+    ])
+    results = get_delayed_flights(min_delay=15)
+    assert len(results) == 2
+    assert results[0]["flight_id"] == "TK1"
+    assert results[0]["max_delay"] == 83
+    assert results[1]["max_delay"] == 30
+
+
+@patch("tools.direct_query.get_db")
+def test_delayed_flights_empty_when_none(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_delayed_flights() == []
+
+
+# ── get_flights_by_status ──────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_flights_by_status_returns_correct_fields(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK5", "IST", "ORD", "en-route", 35000, 975, "2026-07-01 11:17", "2026-07-01 20:15"),
+    ])
+    results = get_flights_by_status("en-route")
+    assert len(results) == 1
+    assert results[0]["status"] == "en-route"
+    assert results[0]["dep_time"] == "11:17 UTC"
+
+
+@patch("tools.direct_query.get_db")
+def test_flights_by_status_landed_empty(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_flights_by_status("landed") == []
+
+
+# ── get_flights_arriving_ist ───────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_flights_arriving_ist_fields(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("EK121", "DXB", "en-route", "16", None, "16", 5,
+         "2026-07-01 09:48", "2026-07-01 14:18", 35000),
+    ])
+    results = get_flights_arriving_ist()
+    assert results[0]["flight_id"] == "EK121"
+    assert results[0]["arr_baggage"] == "16"
+    assert results[0]["arr_time"] == "14:18 UTC"
+    assert results[0]["altitude_ft"] == 35000
+
+
+@patch("tools.direct_query.get_db")
+def test_flights_arriving_ist_empty(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_flights_arriving_ist() == []
+
+
+# ── get_flights_departing_ist ──────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_flights_departing_ist_fields(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK968", "ECN", "en-route", "F6A", None, 7,
+         "2026-07-01 10:22", "2026-07-01 12:01", 985),
+    ])
+    results = get_flights_departing_ist()
+    assert results[0]["dep_gate"] == "F6A"
+    assert results[0]["dep_delayed"] == 7
+    assert results[0]["dep_time"] == "10:22 UTC"
+
+
+# ── get_baggage_claim ──────────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_baggage_claim_found(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("EK121", "DXB", "IST", "16", "16", "2026-07-01 14:18", "landed")
+    ])
+    r = get_baggage_claim("EK121")
+    assert r["arr_baggage"] == "16"
+    assert r["status"] == "landed"
+
+
+@patch("tools.direct_query.get_db")
+def test_baggage_claim_no_belt_yet(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("QR240", "DOH", "IST", None, None, "2026-07-01 14:50", "en-route")
+    ])
+    r = get_baggage_claim("QR240")
+    assert r["arr_baggage"] is None
+
+
+@patch("tools.direct_query.get_db")
+def test_baggage_claim_unknown_flight(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_baggage_claim("ZZ999") is None
+
+
+# ── get_flights_by_airline ─────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_flights_by_airline_tk(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK1", "IST", "JFK", "en-route", 35000, 900, 83, None,
+         "2026-07-01 10:00", "2026-07-01 20:00"),
+        ("TK5", "IST", "ORD", "en-route", 33000, 975, None, None,
+         "2026-07-01 11:17", "2026-07-01 20:15"),
+    ])
+    results = get_flights_by_airline("TK")
+    assert len(results) == 2
+    assert all(f["flight_id"].startswith("TK") for f in results)
+
+
+@patch("tools.direct_query.get_db")
+def test_flights_by_airline_unknown(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_flights_by_airline("XX") == []
+
+
+# ── get_altitude_trend ─────────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_climbing_via_vspeed(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK1", 35000, 34500, 12, "en-route")
+    ])
+    r = get_altitude_trend("TK1")
+    assert r["trend"] == "climbing"
+    assert "12" in r["detail"]
+
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_descending_via_vspeed(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK1", 10000, 12000, -18, "en-route")
+    ])
+    r = get_altitude_trend("TK1")
+    assert r["trend"] == "descending"
+
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_level_vspeed_zero(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("TK1", 35000, 35000, 0, "en-route")
+    ])
+    r = get_altitude_trend("TK1")
+    assert r["trend"] == "level"
+
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_fallback_to_prev_alt_diff(mock_get_db):
+    # No v_speed, falls back to prev_altitude_ft diff
+    mock_get_db.return_value = _mock_db([
+        ("TK1", 35000, 34000, None, "en-route")
+    ])
+    r = get_altitude_trend("TK1")
+    assert r["trend"] == "climbing"
+
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_ignores_absurd_diff(mock_get_db):
+    # >3000 ft diff with no v_speed → sanity cap → unknown
+    mock_get_db.return_value = _mock_db([
+        ("TK1", 35000, 8000, None, "en-route")
+    ])
+    r = get_altitude_trend("TK1")
+    assert r["trend"] == "unknown"
+
+
+@patch("tools.direct_query.get_db")
+def test_altitude_trend_unknown_flight(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_altitude_trend("ZZ999") is None
+
+
+# ── get_scheduled_times ────────────────────────────────────
+
+@patch("tools.direct_query.get_db")
+def test_scheduled_times_full_data(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("SV258", "IST", "MED", "en-route",
+         "2026-07-01 10:17", "2026-07-01 14:03",
+         "2026-07-01 10:17", "2026-07-01 14:16",
+         None, 13)
+    ])
+    r = get_scheduled_times("SV258")
+    assert r["dep_scheduled"] == "10:17 UTC"
+    assert r["arr_scheduled"] == "14:03 UTC"
+    assert r["arr_estimated"] == "14:16 UTC"
+    assert r["arr_delayed"] == 13
+    assert r["dep_delayed"] is None
+
+
+@patch("tools.direct_query.get_db")
+def test_scheduled_times_no_data(mock_get_db):
+    mock_get_db.return_value = _mock_db([
+        ("RJ261", "IST", "AMM", "en-route",
+         None, None, None, None, None, None)
+    ])
+    r = get_scheduled_times("RJ261")
+    assert r["dep_scheduled"] is None
+    assert r["arr_estimated"] is None
+
+
+@patch("tools.direct_query.get_db")
+def test_scheduled_times_unknown_flight(mock_get_db):
+    mock_get_db.return_value = _mock_db([])
+    assert get_scheduled_times("ZZ999") is None

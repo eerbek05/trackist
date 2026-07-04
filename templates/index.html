@@ -2,430 +2,141 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>IGA Flight Chatbot</title>
+  <title>TrackIST (Flight Information Assistant)</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      background: #1a1a1a;
-      color: #ececec;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      position: relative;
-    }
-
-    .header {
-      position: relative;
-      z-index: 2;
-      text-align: center;
-      padding: 20px;
-      font-size: 18px;
-      font-weight: 600;
-      color: #ececec;
-      border-bottom: 1px solid #2e2e2e;
-      background: #1a1a1a;
-      transition: background 0.2s;
-    }
-
-    .chat-area {
-      position: relative;
-      z-index: 2;
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px 0;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      max-width: 720px;
-      width: 100%;
-      margin: 0 auto;
-    }
-
-    .msg {
-      max-width: 75%;
-      padding: 10px 16px;
-      border-radius: 16px;
-      font-size: 15px;
-      line-height: 1.6;
-      transition: background 0.2s;
-    }
-
-    .msg.user {
-      background: #2f2f2f;
-      align-self: flex-end;
-      border-bottom-right-radius: 4px;
-    }
-
-    .msg.assistant {
-      background: #1e1e1e;
-      align-self: flex-start;
-      border: 1px solid #2e2e2e;
-      border-bottom-left-radius: 4px;
-    }
-
-    .input-area {
-      position: relative;
-      z-index: 2;
-      padding: 16px;
-      border-top: 1px solid #2e2e2e;
-      background: #1a1a1a;
-      transition: background 0.2s;
-    }
-
-    .input-wrap {
-      max-width: 720px;
-      margin: 0 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      background: #2f2f2f;
-      border: 1px solid #3e3e3e;
-      border-radius: 12px;
-      padding: 10px 16px;
-      transition: background 0.2s;
-    }
-
-    /* Map open: turn chrome translucent so the map shows through */
-    body.map-open .header,
-    body.map-open .input-area {
-      background: rgba(26, 26, 26, 0.55);
-      backdrop-filter: blur(6px);
-    }
-
-    body.map-open .msg.user {
-      background: rgba(47, 47, 47, 0.6);
-    }
-
-    body.map-open .msg.assistant {
-      background: rgba(30, 30, 30, 0.6);
-    }
-
-    body.map-open .input-wrap {
-      background: rgba(47, 47, 47, 0.6);
-      backdrop-filter: blur(6px);
-    }
-
-    /* While the map is open, the chat/header/input containers themselves
-       must not capture mouse events in their empty space — only the
-       actual interactive bits inside them should. Everything else falls
-       through to the map underneath, so drag/zoom works anywhere. */
-    body.map-open .header,
-    body.map-open .chat-area,
-    body.map-open .input-area {
-      pointer-events: none;
-    }
-
-    body.map-open .header *,
-    body.map-open .chat-area .msg,
-    body.map-open .input-area * {
-      pointer-events: auto;
-    }
-
-    .input-row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .input-wrap input[type="text"] {
-      flex: 1;
-      background: transparent;
-      border: none;
-      outline: none;
-      color: #ececec;
-      font-size: 15px;
-    }
-
-    .input-wrap input[type="text"]::placeholder {
-      color: #666;
-    }
-
-    .input-wrap button {
-      background: #4a4a4a;
-      border: none;
-      border-radius: 8px;
-      color: #ececec;
-      padding: 6px 14px;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    .input-wrap button:hover {
-      background: #555;
-    }
-
-    .upload-btn {
-      background: none;
-      border: none;
-      color: #ececec;
-      font-size: 22px;
-      cursor: pointer;
-      padding: 0 4px;
-      line-height: 1;
-    }
-
-    .upload-btn:hover {
-      color: #aaa;
-    }
-
-    /* Görsel önizleme */
-    .image-preview-wrap {
-      display: none;
-      position: relative;
-      width: fit-content;
-    }
-
-    .image-preview-wrap img {
-      height: 60px;
-      border-radius: 8px;
-      display: block;
-    }
-
-    .image-preview-wrap .remove-btn {
-      position: absolute;
-      top: -6px;
-      right: -6px;
-      background: #555;
-      border: none;
-      color: #ececec;
-      border-radius: 50%;
-      width: 18px;
-      height: 18px;
-      font-size: 11px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-
-    /* Chatte görsel */
-    .msg img {
-      max-width: 100%;
-      border-radius: 10px;
-      display: block;
-      margin-bottom: 6px;
-    }
-
-    .map-toggle-btn {
-      position: absolute;
-      top: 16px;
-      right: 16px;
-      background: #2f2f2f;
-      border: 1px solid #3e3e3e;
-      border-radius: 12px;
-      padding: 8px 14px;
-      color: #ececec;
-      font-size: 14px;
-      cursor: pointer;
-      z-index: 3;
-    }
-
-    .map-toggle-btn:hover {
-      background: #3a3a3a;
-    }
-
-    /* Real header buttons (not Leaflet's default control) so they live in
-       the header's stacking context and are never hidden behind the map. */
-    .map-zoom-controls {
-      display: none;
-      position: absolute;
-      top: 16px;
-      left: 16px;
-      gap: 6px;
-      z-index: 3;
-    }
-
-    body.map-open .map-zoom-controls {
-      display: flex;
-    }
-
-    .map-zoom-controls button {
-      width: 36px;
-      height: 36px;
-      background: #2f2f2f;
-      border: 1px solid #3e3e3e;
-      border-radius: 10px;
-      color: #ececec;
-      font-size: 18px;
-      cursor: pointer;
-      line-height: 1;
-    }
-
-    .map-zoom-controls button:hover {
-      background: #3a3a3a;
-    }
-
-    /* The map sits as a fixed full-screen background behind the chat UI */
-    #map {
-      display: none;
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      background: #0d0d0d;
-      z-index: 1;
-    }
-
-    body.map-open #map {
-      display: block;
-    }
-
-    .leaflet-control-attribution {
-      display: none !important;
-    }
-
-    .flight-marker-icon {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      border: 1px solid;
-      box-shadow: 0 0 4px rgba(0,0,0,0.5);
-      transition: transform 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
-      transform-origin: center;
-    }
-
-    .flight-marker-icon.departure {
-      background: rgba(58, 134, 255, 0.9);
-      border-color: #3a86ff;
-    }
-
-    .flight-marker-icon.arrival {
-      background: rgba(255, 99, 72, 0.9);
-      border-color: #ff6348;
-    }
-
-    /* Applied while a flight is being looked up/zoomed to, or hovered */
-    .flight-marker-icon.highlighted {
-      transform: scale(1.7);
-      background: #9b59b6 !important;
-      border-color: #c896f0 !important;
-      box-shadow: 0 0 10px rgba(155, 89, 182, 0.9);
-      z-index: 1000;
-    }
-
-    /* Points north (up) at 0deg; rotated per-flight to match its actual
-       heading from AirLabs ("dir", degrees clockwise from north) — CSS
-       rotate() is already clockwise-positive, so no sign flip needed. */
-    .flight-arrow {
-      width: 12px;
-      height: 12px;
-      transform-origin: 50% 50%;
-      transition: transform 0.4s;
-    }
-
-    .flight-tooltip {
-      background: #1e1e1e;
-      color: #ececec;
-      border: 1px solid #3e3e3e;
-      border-radius: 6px;
-      padding: 2px 6px;
-      font-size: 11px;
-    }
-
-    .airport-label {
-      background: rgba(155, 89, 182, 0.9);
-      color: #fff;
-      border: 1px solid #c896f0;
-      border-radius: 6px;
-      padding: 3px 8px;
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .airport-label::before {
-      border-top-color: rgba(155, 89, 182, 0.9) !important;
-    }
-
-    /* Fixed (not a child of #map) so it always sits above Leaflet's internal
-       panes/controls, which use z-index values up to ~1000 */
-    .map-legend {
-      display: none;
-      position: fixed;
-      bottom: 16px;
-      left: 16px;
-      z-index: 1001;
-      background: rgba(22, 22, 22, 0.9);
-      border: 1px solid #2e2e2e;
-      border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 12px;
-      color: #ececec;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    body.map-open .map-legend {
-      display: flex;
-    }
-
-    .map-legend .legend-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .map-legend .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-
-    .map-legend .dot.departure { background: #3a86ff; }
-    .map-legend .dot.arrival { background: #ff6348; }
-
-    .map-toast {
-      position: fixed;
-      bottom: 90px;
-      left: 50%;
-      transform: translateX(-50%) translateY(10px);
-      z-index: 1001;
-      background: rgba(22, 22, 22, 0.95);
-      border: 1px solid #3e3e3e;
-      border-radius: 10px;
-      padding: 10px 16px;
-      font-size: 13px;
-      color: #ececec;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s, transform 0.2s;
-    }
-
-    .map-toast.visible {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-  </style>
+  <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
 
   <div class="header">
-    <div class="map-zoom-controls" id="mapZoomControls">
-      <button type="button" id="zoomInBtn" aria-label="Zoom in">+</button>
-      <button type="button" id="zoomOutBtn" aria-label="Zoom out">−</button>
+    <div class="header-left">
+      <div class="map-zoom-controls" id="mapZoomControls">
+        <button type="button" id="zoomInBtn" aria-label="Zoom in">+</button>
+        <button type="button" id="zoomOutBtn" aria-label="Zoom out">−</button>
+      </div>
+      <button class="chat-toggle-btn" id="chatToggleBtn">Toggle Chat</button>
     </div>
-    <img src="{{ url_for('static', filename='iga_logo.jpeg') }}" style="height: 64px; vertical-align: middle; margin-right: 20px; border-radius: 12px;">
-    Flight Information Assistant
-    <button class="map-toggle-btn" id="mapToggleBtn">🗺️ Map</button>
+    <div class="header-center">
+      <span style="font-size: 28px; vertical-align: middle; margin-right: 10px;">📡</span>
+      TrackIST <span style="font-weight: 400; opacity: 0.7; font-size: 14px;">(Flight Information Assistant)</span>
+    </div>
+    <div class="header-right">
+      <button class="map-toggle-btn" id="mapToggleBtn">🗺️ Map</button>
+    </div>
   </div>
 
   <div id="map"></div>
 
   <div class="map-legend" id="mapLegend">
-    <div class="legend-row"><span class="dot departure"></span> Departing Istanbul</div>
-    <div class="legend-row"><span class="dot arrival"></span> Arriving Istanbul</div>
+    <div class="legend-row"><span class="dot departure"></span> Departing Istanbul <span id="legend-dep-count"></span></div>
+    <div class="legend-row"><span class="dot arrival"></span> Arriving Istanbul <span id="legend-arr-count"></span></div>
+    <div class="live-badge"><span class="live-dot"></span> LIVE — next update in <span id="liveCountdown">60</span>s</div>
   </div>
 
   <div class="map-toast" id="mapToast"></div>
+
+  <div id="flight-dashboard">
+    <div class="fd-header">
+      <span class="fd-flight-id" id="fd-flight-id">—</span>
+      <span class="fd-status-badge" id="fd-status">—</span>
+      <button class="fd-close-btn" id="fd-close">✕</button>
+    </div>
+    <div class="fd-direction" id="fd-direction">—</div>
+    <div class="fd-route">
+      <span id="fd-from">—</span>
+      <span class="fd-route-arrow">→</span>
+      <span id="fd-to">—</span>
+    </div>
+    <hr class="fd-divider">
+    <div class="fd-grid">
+      <div class="fd-stat">
+        <span class="fd-stat-label">Altitude</span>
+        <span class="fd-stat-value" id="fd-altitude">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Speed</span>
+        <span class="fd-stat-value" id="fd-speed">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Heading</span>
+        <span class="fd-stat-value" id="fd-heading">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Aircraft</span>
+        <span class="fd-stat-value" id="fd-aircraft">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Dep. Time</span>
+        <span class="fd-stat-value" id="fd-departure">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Arr. Time</span>
+        <span class="fd-stat-value" id="fd-arrival">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">ETA</span>
+        <span class="fd-stat-value" id="fd-eta">—</span>
+      </div>
+      <div class="fd-stat" id="fd-gate-row" style="display:none">
+        <span class="fd-stat-label">Gate</span>
+        <span class="fd-stat-value" id="fd-gate">—</span>
+      </div>
+      <div class="fd-stat" id="fd-terminal-row" style="display:none">
+        <span class="fd-stat-label">Terminal</span>
+        <span class="fd-stat-value" id="fd-terminal">—</span>
+      </div>
+      <div class="fd-stat" id="fd-delay-row" style="display:none">
+        <span class="fd-stat-label">Delay</span>
+        <span class="fd-stat-value" id="fd-delay">—</span>
+      </div>
+      <div class="fd-stat" id="fd-baggage-row" style="display:none">
+        <span class="fd-stat-label">Baggage</span>
+        <span class="fd-stat-value" id="fd-baggage">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Updated</span>
+        <span class="fd-stat-value" id="fd-updated">—</span>
+      </div>
+      <div class="fd-stat">
+        <span class="fd-stat-label">Coordinates</span>
+        <span class="fd-stat-value fd-coords" id="fd-coords">—</span>
+      </div>
+    </div>
+
+    <hr class="fd-divider" id="fd-weather-divider" style="display:none">
+    <div class="fd-weather" id="fd-weather" style="display:none">
+      <div class="fd-weather-row">
+        <span class="fd-weather-label" id="fd-weather-airport">Dest. Weather</span>
+        <span class="fd-weather-val">
+          <span id="fd-weather-emoji">—</span>
+          <span id="fd-weather-condition">—</span>
+        </span>
+      </div>
+      <div class="fd-weather-row">
+        <span class="fd-weather-label">Temp / Wind</span>
+        <span class="fd-weather-val" id="fd-weather-detail">—</span>
+      </div>
+    </div>
+
+    <hr class="fd-divider" id="fd-progress-divider" style="display:none">
+    <div class="fd-progress-wrap" id="fd-progress-wrap" style="display:none">
+      <div class="fd-progress-track">
+        <div class="fd-progress-done" id="fd-progress-done"></div>
+        <div class="fd-progress-plane" id="fd-progress-plane">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path d="M12 1 L13.4 9 L19 10.5 L19 12 L13.6 11.3 L14.2 17.5 L16.5 19.5 L16.5 21 L12 19.7 L7.5 21 L7.5 19.5 L9.8 17.5 L10.4 11.3 L5 12 L5 10.5 L10.6 9 Z"
+              fill="#fff" stroke="#fff" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+      <div class="fd-progress-labels">
+        <span id="fd-prog-from">—</span>
+        <span id="fd-prog-dist">—</span>
+        <span id="fd-prog-to">—</span>
+      </div>
+    </div>
+    <div class="fd-pin-hint" id="fd-pin-hint">Click to pin</div>
+  </div>
 
   <div class="chat-area">
     {% for msg in history %}
@@ -436,727 +147,27 @@
   <div class="input-area">
     <div style="max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end;">
       <form id="chatForm" class="input-wrap" style="flex: 1; margin: 0;">
-
-        <!-- Image preview -->
         <div class="image-preview-wrap" id="imagePreviewWrap">
           <img id="imagePreview" src="" alt="preview" />
           <button type="button" class="remove-btn" id="removeImage">✕</button>
         </div>
-
         <div class="input-row">
           <label for="imageInput" class="upload-btn">+</label>
           <input type="file" id="imageInput" accept="image/*" style="display: none;" />
-          <input
-            type="text"
-            name="soru"
-            id="soruInput"
-            placeholder="Type your question or paste an image..."
-            autofocus
-          />
+          <input type="text" name="soru" id="soruInput"
+                 placeholder="Type your question or paste an image..." autofocus />
           <button type="submit">Send</button>
         </div>
-
       </form>
-      <button type="button" id="clearChatBtn" style="background: #2f2f2f; border: 1px solid #3e3e3e; border-radius: 12px; padding: 10px 14px; color: #888; font-size: 18px; cursor: pointer;">🗑️</button>
+      <button type="button" id="clearChatBtn"
+              style="background: #2f2f2f; border: 1px solid #3e3e3e; border-radius: 12px; padding: 10px 14px; color: #888; font-size: 18px; cursor: pointer;">🗑️</button>
     </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-  const chat = document.querySelector('.chat-area');
-  chat.scrollTop = chat.scrollHeight;
-
-  // Clear the conversation without a full page reload — a real navigation
-  // would also tear down the map (open/closed state, markers, zoom level).
-  document.getElementById('clearChatBtn').addEventListener('click', async function() {
-    await fetch('/clear');
-    chat.innerHTML = '';
-  });
-
-  // ---- Live flight map ----
-  const mapToggleBtn = document.getElementById('mapToggleBtn');
-  const zoomInBtn = document.getElementById('zoomInBtn');
-  const zoomOutBtn = document.getElementById('zoomOutBtn');
-
-  let flightMap = null;
-  let flightMarkers = {};
-  let mapRefreshInterval = null;
-  let mapOpen = false;
-
-  function initMap() {
-    if (flightMap) return;
-    // zoomControl: false — we use our own buttons in the header instead,
-    // since Leaflet's default control gets visually trapped behind/under
-    // the header's stacking context.
-    flightMap = L.map('map', { attributionControl: false, zoomControl: false }).setView([41.275, 28.751], 5); // centered on IST
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
-      maxZoom: 19
-    }).addTo(flightMap);
-
-    // Vector layers (polylines, circle markers) normally render in
-    // overlayPane (z-index 400), below markerPane (600) — so at a busy
-    // airport like IST, the dense cluster of flight markers buries the
-    // route line and airport dot completely. Give route elements their own
-    // pane above markerPane so they always stay visible regardless of how
-    // crowded the area underneath is.
-    flightMap.createPane('routePane');
-    flightMap.getPane('routePane').style.zIndex = 620;
-
-    // The route line is drawn from/to the highlighted aircraft's own
-    // coordinates, so it visually runs straight through that marker — and
-    // since routePane sits above markerPane, the line painted over the
-    // plane. Give the currently-highlighted marker an even higher pane so
-    // it pops back above its own route line; every other marker stays in
-    // the normal markerPane.
-    flightMap.createPane('activeMarkerPane');
-    flightMap.getPane('activeMarkerPane').style.zIndex = 630;
-  }
-
-  zoomInBtn.addEventListener('click', () => flightMap && flightMap.zoomIn());
-  zoomOutBtn.addEventListener('click', () => flightMap && flightMap.zoomOut());
-
-  function flightDirection(f) {
-    if (f.from === 'IST') return 'departure';
-    if (f.to === 'IST') return 'arrival';
-    return 'departure';
-  }
-
-  function makeFlightIcon(direction, heading) {
-    // AirLabs gives heading as degrees clockwise from north; default to 0
-    // (pointing north/up) for flights with no heading data yet.
-    const rotation = (typeof heading === 'number') ? heading : 0;
-    // Top-down airplane silhouette — nose at the top (north) at 0deg.
-    // stroke + linejoin/linecap "round" fattens the whole shape (the nose
-    // tip especially) beyond what the bare fill path gives at this size.
-    const arrow = `<svg class="flight-arrow" style="transform: rotate(${rotation}deg)" viewBox="0 0 24 24">` +
-      `<path d="M12 1 L13.4 9 L19 10.5 L19 12 L13.6 11.3 L14.2 17.5 L16.5 19.5 L16.5 21 L12 19.7 L7.5 21 L7.5 19.5 L9.8 17.5 L10.4 11.3 L5 12 L5 10.5 L10.6 9 Z" ` +
-      `fill="#fff" stroke="#fff" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-    return L.divIcon({
-      className: '',
-      html: `<div class="flight-marker-icon ${direction}">${arrow}</div>`,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10],
-      // Lift the popup well above the icon — on hover/active it scales up
-      // to ~1.7x via CSS, and the default anchor sits the popup's tip
-      // right on top of the (visually larger) circle, covering it.
-      popupAnchor: [0, -20]
-    });
-  }
-
-  function buildPopupHtml(f, direction) {
-    const directionLabel = direction === 'departure' ? 'Departure from Istanbul' : 'Arrival in Istanbul';
-    return `<b>${f.flight_id}</b><br>${directionLabel}: ${f.from || '?'} → ${f.to || '?'}`;
-  }
-
-  // Grow + recolor a marker's icon.
-  function highlightMarker(marker) {
-    const el = marker.getElement();
-    const inner = el && el.querySelector('.flight-marker-icon');
-    if (inner) inner.classList.add('highlighted');
-    // Move the marker's DOM node into the pane above routePane so its own
-    // route line (which starts/ends right at this marker) doesn't paint
-    // over it. Leaflet has no public "change pane" API, so this reparents
-    // the icon element directly — safe since panes are just plain divs.
-    const activePane = flightMap && flightMap.getPane('activeMarkerPane');
-    if (el && activePane) activePane.appendChild(el);
-  }
-
-  function unhighlightMarker(marker) {
-    const el = marker.getElement();
-    const inner = el && el.querySelector('.flight-marker-icon');
-    if (inner) inner.classList.remove('highlighted');
-    const markerPane = flightMap && flightMap.getPane('markerPane');
-    if (el && markerPane) markerPane.appendChild(el);
-  }
-
-  // The "active" marker is whichever one currently has its popup open —
-  // via a chat query or a direct click. It stays purple for as long as
-  // that popup stays open, not on a timer. Opening a different popup (by
-  // either route) or closing the popup (by the user, via its × button)
-  // reverts it.
-  let activeMarker = null;
-
-  function setActiveMarker(marker) {
-    if (activeMarker && activeMarker !== marker) {
-      unhighlightMarker(activeMarker);
-      activeMarker.closePopup();
-    }
-    activeMarker = marker;
-    highlightMarker(marker);
-    drawSplitRoute(marker._flightId);
-  }
-
-  // ---- Great-circle interpolation ----
-  // A straight line between two lat/lngs is the *wrong* shape on a globe —
-  // long routes (e.g. JFK→IST) actually bow north along the shortest path.
-  // Interpolate along the great circle and feed Leaflet a polyline with
-  // many points so it renders as that curve instead of a straight segment.
-  function toRad(d) { return d * Math.PI / 180; }
-  function toDeg(r) { return r * 180 / Math.PI; }
-
-  function latLngToVector([lat, lng]) {
-    const phi = toRad(lat), lambda = toRad(lng);
-    return [Math.cos(phi) * Math.cos(lambda), Math.cos(phi) * Math.sin(lambda), Math.sin(phi)];
-  }
-
-  function vectorToLatLng([x, y, z]) {
-    return [toDeg(Math.asin(Math.max(-1, Math.min(1, z)))), toDeg(Math.atan2(y, x))];
-  }
-
-  function slerp(v0, v1, t) {
-    const dot = Math.max(-1, Math.min(1, v0[0] * v1[0] + v0[1] * v1[1] + v0[2] * v1[2]));
-    const theta = Math.acos(dot);
-    if (theta < 1e-6) return v0;
-    const sinTheta = Math.sin(theta);
-    const a = Math.sin((1 - t) * theta) / sinTheta;
-    const b = Math.sin(t * theta) / sinTheta;
-    return [a * v0[0] + b * v1[0], a * v0[1] + b * v1[1], a * v0[2] + b * v1[2]];
-  }
-
-  function greatCirclePoints(start, end, steps = 80) {
-    const v0 = latLngToVector(start), v1 = latLngToVector(end);
-    const points = [];
-    for (let i = 0; i <= steps; i++) {
-      points.push(vectorToLatLng(slerp(v0, v1, i / steps)));
-    }
-    return points;
-  }
-
-  // ---- Route line: flown leg (dep -> current, dashed) + remaining leg
-  // (current -> arr, bold) drawn immediately whenever a flight is purple
-  // (hovered or active) — no click needed to see the split. Clicking
-  // either leg just zooms out to fit both airports.
-  let routeFlown = null;
-  let routeFlownHit = null;
-  let routeRemaining = null;
-  let routeRemainingHit = null;
-  let routeDepLabel = null;
-  let routeArrLabel = null;
-  let routeDepDot = null;
-  let routeArrDot = null;
-  let currentRouteFlightId = null;
-  // Hover can fire several drawSplitRoute() calls back to back before any
-  // of their fetches resolve. Each call used to clear at its *start* only,
-  // so two overlapping calls could both pass their checks and both add
-  // their own layers — nothing ever removed the older set, leaving
-  // permanently orphaned lines on the map. A monotonically increasing
-  // token makes only the most recent call allowed to draw anything.
-  let routeRequestToken = 0;
-
-  function clearRouteLayers() {
-    [routeFlown, routeFlownHit, routeRemaining, routeRemainingHit, routeDepLabel, routeArrLabel, routeDepDot, routeArrDot].forEach(l => { if (l) flightMap.removeLayer(l); });
-    routeFlown = routeFlownHit = routeRemaining = routeRemainingHit = routeDepLabel = routeArrLabel = routeDepDot = routeArrDot = null;
-    currentRouteFlightId = null;
-  }
-
-  async function drawSplitRoute(flightId) {
-    const token = ++routeRequestToken;
-    clearRouteLayers();
-    if (!flightId) {
-      showAllMarkers();
-      return;
-    }
-    currentRouteFlightId = flightId;
-    try {
-      const res = await fetch(`/api/route/${encodeURIComponent(flightId)}`);
-      if (token !== routeRequestToken) return; // superseded by a newer hover/click
-      if (!res.ok) return;
-      const data = await res.json();
-      if (token !== routeRequestToken) return; // superseded while awaiting the body
-      if (!data) return;
-
-      // Clear again right before drawing — belt and suspenders in case
-      // anything slipped in between the checks above.
-      clearRouteLayers();
-      currentRouteFlightId = flightId;
-      hideOtherMarkers(flightId);
-
-      const depLatLng = [data.dep.lat, data.dep.lng];
-      const arrLatLng = [data.arr.lat, data.arr.lng];
-      const curLatLng = data.current ? [data.current.lat, data.current.lng] : null;
-
-      const flownCurve = greatCirclePoints(depLatLng, curLatLng || arrLatLng);
-      const remainingCurve = curLatLng ? greatCirclePoints(curLatLng, arrLatLng) : null;
-      const allPoints = remainingCurve ? flownCurve.concat(remainingCurve) : flownCurve;
-
-      const zoomToRoute = () => {
-        // A great-circle arc can bow out well past either endpoint's
-        // latitude (e.g. JFK→IST peaks over the North Atlantic), so fit to
-        // the curve's own bounds, not just the two airports — otherwise
-        // the top of the arc gets clipped off-screen.
-        flightMap.fitBounds(L.latLngBounds(allPoints), { padding: [60, 60] });
-      };
-
-      // Already-flown leg: dashed, fainter. interactive: false — these
-      // visible lines end *exactly* at the aircraft's own coordinates, and
-      // sitting in routePane (above markerPane for visibility) meant they
-      // could still steal a sliver of hover right at the marker's center,
-      // causing the same flicker the hit-area pane change caused before.
-      // Purely decorative; the actual click target is the separate hit-area
-      // line below, in the default pane.
-      routeFlown = L.polyline(flownCurve, {
-        pane: 'routePane',
-        color: '#9b59b6',
-        weight: 3,
-        opacity: 0.55,
-        dashArray: '6 8',
-        interactive: false
-      }).addTo(flightMap);
-      routeFlownHit = makeRouteHitArea(flownCurve, zoomToRoute);
-
-      // Remaining leg: bold, solid, the visually dominant one.
-      if (remainingCurve) {
-        routeRemaining = L.polyline(remainingCurve, {
-          pane: 'routePane',
-          color: '#9b59b6',
-          weight: 5,
-          opacity: 0.95,
-          interactive: false
-        }).addTo(flightMap);
-        routeRemainingHit = makeRouteHitArea(remainingCurve, zoomToRoute);
-      }
-
-      // Mark the two airports themselves with a dot sized to match the
-      // bold leg's stroke weight (5), so they read as the route's endpoints
-      // rather than just floating labels.
-      routeDepDot = makeAirportDot(depLatLng);
-      routeArrDot = makeAirportDot(arrLatLng);
-
-      // Label both airports — name + IATA code — for as long as the route
-      // is showing.
-      routeDepLabel = makeAirportLabel(depLatLng, data.dep);
-      routeArrLabel = makeAirportLabel(arrLatLng, data.arr);
-    } catch (e) {
-      console.error('Failed to load flight route', e);
-    }
-  }
-
-  function makeAirportDot(latLng) {
-    return L.circleMarker(latLng, {
-      pane: 'routePane',
-      radius: 6,
-      color: '#c896f0',
-      weight: 2,
-      fillColor: '#9b59b6',
-      fillOpacity: 1,
-      interactive: false
-    }).addTo(flightMap);
-  }
-
-  // Flight popups always open *above* their marker (popupAnchor), so when
-  // an airport dot ends up close to the aircraft on screen, a 'top' label
-  // here would fight the popup for the same spot. Opening these below
-  // instead keeps the two from overlapping in the common case.
-  function makeAirportLabel(latLng, airport) {
-    const text = airport.name ? `${airport.name} (${airport.iata_code})` : airport.iata_code;
-    return L.marker(latLng, {
-      icon: L.divIcon({ className: '', html: '', iconSize: [0, 0] }),
-      pane: 'routePane',
-      interactive: false,
-      keyboard: false
-    })
-      .bindTooltip(text, { permanent: true, direction: 'bottom', offset: [0, 8], className: 'airport-label' })
-      .addTo(flightMap);
-  }
-
-  // A near-invisible, much thicker line stacked on top purely to make the
-  // click target forgiving (the visible lines are too thin to hit
-  // reliably). Opacity must stay > 0 — at exactly 0 some browsers treat
-  // the SVG stroke as "unpainted" and stop firing pointer events on it.
-  // Both 'click' and 'mousedown' are bound: a plain click works when the
-  // cursor doesn't move between press and release, but on a trackpad even
-  // a 1px drift makes Leaflet treat it as the start of a map drag instead,
-  // swallowing the 'click' entirely — mousedown (stopped before the map's
-  // own drag handler sees it) catches that case.
-  // NOTE: deliberately left in the default pane (below markerPane), not
-  // routePane — this curve always starts exactly at the aircraft's own
-  // coordinates, so putting its wide (22px) hit area above the marker made
-  // it steal hover from the aircraft itself, causing mouseover/mouseout to
-  // fire in a tight loop (the marker's purple highlight flickering on/off).
-  function makeRouteHitArea(curve, onPress) {
-    const hit = L.polyline(curve, { color: '#000', weight: 22, opacity: 0.01 }).addTo(flightMap);
-    hit.on('mousedown', (e) => {
-      L.DomEvent.stop(e);
-      onPress();
-    });
-    hit.on('click', (e) => {
-      L.DomEvent.stop(e);
-      onPress();
-    });
-    return hit;
-  }
-
-  // While one flight's route is showing, dim every other marker so the
-  // route (and the two airports it connects) stands out — but keep them
-  // faintly visible rather than gone, so the map doesn't look broken.
-  function hideOtherMarkers(exceptFlightId) {
-    Object.values(flightMarkers).forEach(m => {
-      m.setOpacity(m._flightId === exceptFlightId ? 1 : 0.08);
-    });
-  }
-
-  function showAllMarkers() {
-    Object.values(flightMarkers).forEach(m => m.setOpacity(1));
-  }
-
-  function addOrUpdateFlightMarker(f) {
-    const direction = flightDirection(f);
-    const popupHtml = buildPopupHtml(f, direction);
-
-    if (flightMarkers[f.flight_id]) {
-      const existing = flightMarkers[f.flight_id];
-      existing.setLatLng([f.lat, f.lng]);
-      existing.setPopupContent(popupHtml);
-      if (existing._direction !== direction) {
-        // Direction flip is rare (a flight wouldn't normally switch
-        // arrival/departure mid-poll) and needs a whole new icon anyway,
-        // so just rebuild it with the current heading baked in.
-        existing.setIcon(makeFlightIcon(direction, f.heading));
-        existing._direction = direction;
-        existing._heading = f.heading;
-      } else if (typeof f.heading === 'number' && existing._heading !== f.heading) {
-        // Heading changes almost every poll — patch the arrow's rotation
-        // directly instead of rebuilding the whole icon, so the existing
-        // CSS transition animates a smooth turn instead of a hard snap.
-        const el = existing.getElement();
-        const arrow = el && el.querySelector('.flight-arrow');
-        if (arrow) arrow.style.transform = `rotate(${f.heading}deg)`;
-        existing._heading = f.heading;
-      }
-    } else {
-      const marker = L.marker([f.lat, f.lng], { icon: makeFlightIcon(direction, f.heading) })
-        .addTo(flightMap)
-        .bindPopup(popupHtml)
-        .bindTooltip(f.flight_id, { className: 'flight-tooltip', direction: 'top', offset: [0, -10] });
-      marker._direction = direction;
-      marker._heading = f.heading;
-      marker._flightId = f.flight_id;
-      // Hover alone (no click needed) turns the marker purple and draws
-      // its route split into flown/remaining legs.
-      marker.on('mouseover', () => {
-        highlightMarker(marker);
-        drawSplitRoute(marker._flightId);
-      });
-      // Don't revert on mouseout if this marker's popup is the one
-      // currently open — it (and its route) should stay up until that
-      // popup closes. Otherwise, fall back to the active marker's route
-      // if there is one, or clear the route entirely if not.
-      marker.on('mouseout', () => {
-        if (activeMarker === marker) return;
-        unhighlightMarker(marker);
-        if (activeMarker) {
-          drawSplitRoute(activeMarker._flightId);
-        } else {
-          ++routeRequestToken; // cancel any in-flight hover fetch for this marker
-          clearRouteLayers();
-          showAllMarkers();
-        }
-      });
-      // Leaflet already opens the bound popup on click — also fly/zoom to
-      // it, same as asking the chatbot about a flight.
-      marker.on('click', () => {
-        flightMap.flyTo(marker.getLatLng(), 7, { duration: 1.2 });
-        setActiveMarker(marker);
-      });
-      // User closed the popup via its × button (or another popup forced
-      // it closed) — only then does the highlight (and its route line) go away.
-      marker.on('popupclose', () => {
-        if (activeMarker === marker) {
-          unhighlightMarker(marker);
-          activeMarker = null;
-          ++routeRequestToken; // cancel any in-flight route fetch for this marker
-          clearRouteLayers();
-          showAllMarkers();
-        }
-      });
-      flightMarkers[f.flight_id] = marker;
-    }
-    return flightMarkers[f.flight_id];
-  }
-
-  async function refreshFlights() {
-    try {
-      const res = await fetch('/api/flights');
-      const flights = await res.json();
-      const seen = new Set();
-
-      flights.forEach(f => {
-        if (f.lat == null || f.lng == null) return;
-        seen.add(f.flight_id);
-        addOrUpdateFlightMarker(f);
-      });
-
-      // Remove flights that are no longer in the data
-      Object.keys(flightMarkers).forEach(id => {
-        if (!seen.has(id)) {
-          flightMap.removeLayer(flightMarkers[id]);
-          delete flightMarkers[id];
-        }
-      });
-    } catch (e) {
-      console.error('Failed to fetch flight data', e);
-    }
-  }
-
-  function openMap() {
-    let needsResize = false;
-
-    if (!mapOpen) {
-      mapOpen = true;
-      needsResize = true;
-      document.body.classList.add('map-open');
-      mapToggleBtn.textContent = '✕ Close Map';
-      initMap();
-      if (!mapRefreshInterval) {
-        mapRefreshInterval = setInterval(refreshFlights, 15000);
-      }
-    }
-
-    // #map is `display: none` until the class above is applied, so Leaflet
-    // measures it as 0x0 if we touch it too early — any flyTo() right after
-    // would target the wrong pixel position and then "snap" once the size
-    // is corrected. Wait a frame for layout to settle, invalidateSize(), and
-    // only then refresh/return — so callers awaiting this get a map that's
-    // actually ready to fly to a marker.
-    return new Promise(resolve => {
-      requestAnimationFrame(() => {
-        if (needsResize) flightMap.invalidateSize();
-        resolve(refreshFlights());
-      });
-    });
-  }
-
-  function closeMap() {
-    if (!mapOpen) return;
-    mapOpen = false;
-    document.body.classList.remove('map-open');
-    mapToggleBtn.textContent = '🗺️ Map';
-    if (mapRefreshInterval) {
-      clearInterval(mapRefreshInterval);
-      mapRefreshInterval = null;
-    }
-  }
-
-  mapToggleBtn.addEventListener('click', function() {
-    if (mapOpen) {
-      closeMap();
-    } else {
-      openMap();
-    }
-  });
-
-  // Find a flight code (e.g. "TK12", "PC401") in free text
-  function extractFlightCode(text) {
-    const match = text.match(/\b([A-Za-z]{2,3}\s?\d{1,4})\b/);
-    return match ? match[1].toUpperCase().replace(/\s+/g, '') : null;
-  }
-
-  // Open the map (if needed) and fly to a flight's marker once it's loaded
-  async function focusOnFlight(flightId) {
-    if (!flightId) return;
-    await openMap();
-    let marker = flightMarkers[flightId];
-
-    // The full /api/flights list only includes flights with a non-null
-    // position *at that exact poll*, so a flight the chatbot just answered
-    // about can be briefly missing here. Fall back to a direct lookup
-    // (the same one the chatbot itself uses) before giving up.
-    if (!marker) {
-      try {
-        const res = await fetch(`/api/flights/${encodeURIComponent(flightId)}`);
-        if (res.ok) {
-          const f = await res.json();
-          if (f && f.lat != null && f.lng != null) {
-            marker = addOrUpdateFlightMarker(f);
-          }
-        }
-      } catch (e) {
-        console.error('Flight lookup failed', e);
-      }
-    }
-
-    if (marker) {
-      flightMap.flyTo(marker.getLatLng(), 7, { duration: 1.2 });
-      marker.openPopup();
-      // Marker elements only exist once Leaflet has actually painted them;
-      // flyTo's pan/zoom is itself async, so wait a tick before grabbing it.
-      setTimeout(() => setActiveMarker(marker), 50);
-    } else {
-      showMapToast(`No position data available for ${flightId} right now.`);
-    }
-  }
-
-  let toastTimeout = null;
-  function showMapToast(message) {
-    const toast = document.getElementById('mapToast');
-    toast.textContent = message;
-    toast.classList.add('visible');
-    clearTimeout(toastTimeout);
-    toastTimeout = setTimeout(() => toast.classList.remove('visible'), 3000);
-  }
-
-  const imagePreviewWrap = document.getElementById('imagePreviewWrap');
-  const imagePreview = document.getElementById('imagePreview');
-  const removeImageBtn = document.getElementById('removeImage');
-  const soruInput = document.getElementById('soruInput');
-
-  function showPreview(file) {
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      imagePreview.src = e.target.result;
-      imagePreviewWrap.style.display = 'block';
-    };
-    reader.readAsDataURL(file);
-  }
-
-  function clearPreview() {
-    imagePreviewWrap.style.display = 'none';
-    imagePreview.src = '';
-    window.pendingImage = null;
-    document.getElementById('imageInput').value = '';
-  }
-
-  removeImageBtn.addEventListener('click', clearPreview);
-
-  // Image paste
-  soruInput.addEventListener('paste', function(e) {
-    const items = e.clipboardData.items;
-    for (let item of items) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        window.pendingImage = file;
-        showPreview(file);
-        break;
-      }
-    }
-  });
-
-  // Select file with + button
-  document.getElementById('imageInput').addEventListener('change', function() {
-    const file = this.files[0];
-    if (!file) return;
-    window.pendingImage = file;
-    showPreview(file);
-  });
-
-  async function sendImage(file) {
-    const btn = document.querySelector('button[type="submit"]');
-    btn.textContent = 'Analyzing...';
-    btn.disabled = true;
-
-    // Show the image in the chat
-    const userDiv = document.createElement('div');
-    userDiv.className = 'msg user';
-    const imgEl = document.createElement('img');
-    imgEl.src = imagePreview.src;
-    const label = document.createElement('div');
-    label.textContent = 'Analyzing...';
-    label.style.color = '#888';
-    label.style.fontSize = '13px';
-    userDiv.appendChild(imgEl);
-    userDiv.appendChild(label);
-    chat.appendChild(userDiv);
-
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = 'msg assistant';
-    thinkingDiv.id = 'thinking';
-    thinkingDiv.textContent = 'Reading flight code...';
-    chat.appendChild(thinkingDiv);
-    chat.scrollTop = chat.scrollHeight;
-
-    clearPreview();
-
-    const formData = new FormData();
-    formData.append('image', file);
-
-    const response = await fetch('/analyze', {
-      method: 'POST',
-      body: formData
-    });
-
-    const data = await response.json();
-
-    // Update the "Analyzing..." label
-    label.textContent = '📷 Boarding pass';
-
-    document.getElementById('thinking').textContent = data.cevap;
-    document.getElementById('thinking').removeAttribute('id');
-    chat.scrollTop = chat.scrollHeight;
-
-    btn.textContent = 'Send';
-    btn.disabled = false;
-    soruInput.focus();
-
-    if (data.flight_code) {
-      focusOnFlight(data.flight_code);
-    }
-  }
-
-  // Form submit
-  document.getElementById('chatForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-
-    const btn = document.querySelector('button[type="submit"]');
-
-    if (window.pendingImage) {
-      const file = window.pendingImage;
-      await sendImage(file);
-      return;
-    }
-
-    const soru = soruInput.value.trim();
-    if (!soru) return;
-
-    soruInput.value = '';
-    btn.textContent = 'Thinking...';
-    btn.disabled = true;
-
-    const userDiv = document.createElement('div');
-    userDiv.className = 'msg user';
-    userDiv.textContent = soru;
-    chat.appendChild(userDiv);
-
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = 'msg assistant';
-    thinkingDiv.id = 'thinking';
-    thinkingDiv.textContent = 'Thinking...';
-    chat.appendChild(thinkingDiv);
-    chat.scrollTop = chat.scrollHeight;
-
-    // Zoom to the mentioned flight right away, in parallel with the answer
-    // being generated, instead of waiting for the response to come back.
-    const flightCode = extractFlightCode(soru);
-    if (flightCode) {
-      focusOnFlight(flightCode);
-    }
-
-    const response = await fetch('/chat', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({soru: soru})
-    });
-
-    const data = await response.json();
-
-    document.getElementById('thinking').textContent = data.cevap;
-    document.getElementById('thinking').removeAttribute('id');
-    chat.scrollTop = chat.scrollHeight;
-
-    btn.textContent = 'Send';
-    btn.disabled = false;
-    soruInput.focus();
-
-    // The question might not name a flight at all (e.g. "which flight is
-    // fastest right now?") — the code only shows up in the answer. Check
-    // there too and zoom if it's a different flight than we already focused.
-    const answerFlightCode = extractFlightCode(data.cevap);
-    if (answerFlightCode && answerFlightCode !== flightCode) {
-      focusOnFlight(answerFlightCode);
-    }
-  });
-  </script>
-
+  <script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+  <script src="/static/js/map.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+  <script src="/static/js/chat.js"></script>
 </body>
 </html>

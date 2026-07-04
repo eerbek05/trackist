@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+flask_session/
+*.log
+.git/
+.claude/
+.pytest_cache/
+.DS_Store
+test.py
+agentic-ai-proje-notlari.md

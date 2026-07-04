@@ -18,14 +18,30 @@ TABLE_SCHEMA = """
 Tablo adı: flights
 Kolonlar:
 - flight_id VARCHAR(10) — uçuş kodu (örn: TK2200)
-- from_airport VARCHAR(100) — kalkış havalimanı (örn: İstanbul (IST))
-- to_airport VARCHAR(100) — varış havalimanı (örn: New York (JFK))
+- flight_icao VARCHAR(10) — ICAO uçuş kodu (örn: THY2200)
+- from_airport VARCHAR(100) — kalkış havalimanı IATA kodu (örn: IST)
+- to_airport VARCHAR(100) — varış havalimanı IATA kodu (örn: JFK)
 - speed_kmh INTEGER — hız km/h cinsinden
 - altitude_ft INTEGER — irtifa feet cinsinden
-- departure VARCHAR(10) — kalkış saati (örn: 10:30)
-- arrival VARCHAR(10) — varış saati (örn: 14:45)
-- aircraft VARCHAR(50) — uçak tipi (örn: Boeing 777-300ER)
-- status VARCHAR(20) — durum (Havada veya İndi)
+- departure VARCHAR(20) — planlanan kalkış saati UTC (örn: 2026-07-01 10:30)
+- arrival VARCHAR(20) — planlanan varış saati UTC (örn: 2026-07-01 14:45)
+- aircraft VARCHAR(50) — uçak tipi ICAO kodu (örn: B77W, A321)
+- status VARCHAR(20) — durum (en-route, landed, scheduled)
+- lat FLOAT — anlık enlem
+- lng FLOAT — anlık boylam
+- heading INTEGER — uçuş yönü derece cinsinden (0=Kuzey)
+- prev_altitude_ft INTEGER — bir önceki irtifa (trend hesabı için)
+- v_speed_fpm INTEGER — dikey hız km/h (pozitif=tırmanış, negatif=iniş)
+- dep_gate VARCHAR(20) — kalkış kapısı (örn: A12)
+- arr_gate VARCHAR(20) — iniş kapısı
+- dep_terminal VARCHAR(20) — kalkış terminali
+- arr_terminal VARCHAR(20) — iniş terminali
+- arr_baggage VARCHAR(20) — bagaj bandı numarası
+- dep_delayed INTEGER — kalkış gecikmesi dakika cinsinden
+- arr_delayed INTEGER — varış gecikmesi dakika cinsinden
+- dep_estimated VARCHAR(20) — tahmini kalkış saati UTC
+- arr_estimated VARCHAR(20) — tahmini varış saati UTC
+- updated_at TIMESTAMP — son güncelleme zamanı UTC
 """
 
 def generate_sql(user_question):

@@ -60,9 +60,9 @@ def get_remaining_distance(flight_id, arr_iata):
     lat1 = flight.get("lat")
     lng1 = flight.get("lng")
     
-    if not lat1 or not lng1:
+    if lat1 is None or lng1 is None:
         return None
-    
+
     arr_coords = get_airport_coords(arr_iata)
     if not arr_coords:
         return None
@@ -89,7 +89,7 @@ def estimate_arrival(flight_id, arr_iata):
     lng1 = flight.get("lng")
     speed = flight.get("speed_kmh")
 
-    if not lat1 or not lng1 or not speed:
+    if lat1 is None or lng1 is None or not speed:
         return None
 
     arr_coords = get_airport_coords(arr_iata)
@@ -119,7 +119,7 @@ def estimate_arrival(flight_id, arr_iata):
 def get_flights_in_air_count():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM flights WHERE status IN ('Havada', 'en-route')")
+    cur.execute("SELECT COUNT(*) FROM flights WHERE status = 'en-route'")
     count = cur.fetchone()[0]
     conn.close()
     return count
@@ -127,7 +127,7 @@ def get_flights_in_air_count():
 def get_flights_in_air_list():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT flight_id, from_airport, to_airport FROM flights WHERE status IN ('Havada', 'en-route')")
+    cur.execute("SELECT flight_id, from_airport, to_airport FROM flights WHERE status = 'en-route'")
     rows = cur.fetchall()
     conn.close()
     return [{"flight_id": r[0], "from": r[1], "to": r[2]} for r in rows]
@@ -145,32 +145,12 @@ def get_fastest_flight():
 def get_slowest_flight():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT flight_id, from_airport, to_airport, speed_kmh FROM flights ORDER BY speed_kmh ASC LIMIT 1")
+    cur.execute("SELECT flight_id, from_airport, to_airport, speed_kmh FROM flights WHERE speed_kmh > 0 AND status = 'en-route' ORDER BY speed_kmh ASC LIMIT 1")
     row = cur.fetchone()
     conn.close()
     if not row:
         return None
     return {"flight_id": row[0], "from": row[1], "to": row[2], "speed_kmh": row[3]}
-
-def get_longest_flight():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT flight_id, from_airport, to_airport, duration_minutes FROM flights ORDER BY duration_minutes DESC LIMIT 1")
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"flight_id": row[0], "from": row[1], "to": row[2], "duration_minutes": row[3]}
-
-def get_shortest_flight():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT flight_id, from_airport, to_airport, duration_minutes FROM flights ORDER BY duration_minutes ASC LIMIT 1")
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"flight_id": row[0], "from": row[1], "to": row[2], "duration_minutes": row[3]}
 
 def get_all_destinations():
     conn = get_db()
@@ -179,14 +159,6 @@ def get_all_destinations():
     rows = cur.fetchall()
     conn.close()
     return [r[0] for r in rows]
-
-def get_flights_to_airport(airport):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM flights WHERE to_airport ILIKE %s", (f"%{airport}%",))
-    count = cur.fetchone()[0]
-    conn.close()
-    return count
 
 def get_top_destinations_from_istanbul():
     conn = get_db()
@@ -209,7 +181,7 @@ def get_highest_flight():
     cur.execute("""
         SELECT flight_id, from_airport, to_airport, altitude_ft 
         FROM flights 
-        WHERE status IN ('Havada', 'en-route')
+        WHERE status = 'en-route'
         ORDER BY altitude_ft DESC 
         LIMIT 1
     """)
@@ -226,7 +198,7 @@ def get_flights_on_route(dep_iata, arr_iata):
         SELECT COUNT(*), array_agg(flight_id)
         FROM flights
         WHERE from_airport = %s AND to_airport = %s
-        AND status IN ('Havada', 'en-route')
+        AND status = 'en-route'
     """, (dep_iata, arr_iata))
     row = cur.fetchone()
     conn.close()
@@ -237,15 +209,18 @@ def get_flights_on_route(dep_iata, arr_iata):
 def get_current_country(flight_id):
     from tools.direct_query import get_flight_by_id
     flight = get_flight_by_id(flight_id)
-    if not flight or not flight.get("lat"):
+    if not flight or flight.get("lat") is None:
         return None
     
-    geolocator = Nominatim(user_agent="iga-chatbot")
-    location = geolocator.reverse(f"{flight['lat']}, {flight['lng']}", language="tr")
+    geolocator = Nominatim(user_agent="trackist-chatbot", timeout=5)
+    try:
+        location = geolocator.reverse(f"{flight['lat']}, {flight['lng']}", language="en", timeout=5)
+    except Exception:
+        return None
     if not location:
         return None
-    
-    country = location.raw.get("address", {}).get("country", "bilinmiyor")
+
+    country = location.raw.get("address", {}).get("country", "unknown")
     return {"flight_id": flight_id, "country": country, "lat": flight["lat"], "lng": flight["lng"]}
 
 
@@ -268,8 +243,6 @@ def get_total_route_distance(dep_iata, arr_iata):
     return round(mesafe_km)
 
 def get_route_completion(flight_id, dep_iata, arr_iata):
-    from tools.direct_query import get_flight_by_id
-    
     toplam = get_total_route_distance(dep_iata, arr_iata)
     kalan = get_remaining_distance(flight_id, arr_iata)
     

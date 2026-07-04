@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15
     environment:
-      POSTGRES_DB: iga_chatbot
+      POSTGRES_DB: trackist
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
@@ -12,38 +10,49 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
+  poller:
+    build: .
+    command: python3 workers/poller.py
+    env_file:
+      - .env
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/trackist
     depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
+      db:
+        condition: service_healthy
+
+  opensky-position:
+    build: .
+    command: python3 workers/opensky_position.py
+    env_file:
+      - .env
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/trackist
+    depends_on:
+      db:
+        condition: service_healthy
 
   web:
     build: .
     ports:
       - "5001:5001"
+    env_file:
+      - .env
     environment:
-      - COHERE_API_KEY=${COHERE_API_KEY}
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/iga_chatbot
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/trackist
     depends_on:
-      - db
-      - kafka
+      db:
+        condition: service_healthy
     volumes:
       - ./flask_session:/app/flask_session
+      - ./templates:/app/templates
+      - ./static:/app/static
 
 volumes:
   postgres_data:

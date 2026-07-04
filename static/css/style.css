@@ -1,0 +1,741 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #1a1a1a;
+  color: #ececec;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ececec;
+  border-bottom: 1px solid #2e2e2e;
+  background: #1a1a1a;
+  transition: background 0.2s;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+
+.header-center {
+  flex: 1;
+  text-align: center;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  justify-content: flex-end;
+}
+
+.chat-area {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.msg {
+  max-width: 75%;
+  padding: 10px 16px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.6;
+  transition: background 0.2s;
+}
+
+.msg.user {
+  background: #2f2f2f;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.msg.assistant {
+  background: #1e1e1e;
+  align-self: flex-start;
+  border: 1px solid #2e2e2e;
+  border-bottom-left-radius: 4px;
+}
+
+.msg.assistant.streaming::after {
+  content: '▍';
+  display: inline-block;
+  animation: blink 0.8s step-start infinite;
+  margin-left: 2px;
+  opacity: 0.7;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 0;   }
+}
+
+.input-area {
+  position: relative;
+  z-index: 2;
+  padding: 22px 16px;
+  border-top: 1px solid #2e2e2e;
+  background: #1a1a1a;
+  transition: background 0.2s;
+}
+
+.input-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #2f2f2f;
+  border: 1px solid #3e3e3e;
+  border-radius: 12px;
+  padding: 10px 16px;
+  transition: background 0.2s;
+}
+
+/* Map open: turn chrome translucent so the map shows through */
+body.map-open .header,
+body.map-open .input-area {
+  background: rgba(26, 26, 26, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+body.map-open .msg.user {
+  background: rgba(47, 47, 47, 0.6);
+}
+
+body.map-open .msg.assistant {
+  background: rgba(30, 30, 30, 0.6);
+}
+
+body.map-open .input-wrap {
+  background: rgba(47, 47, 47, 0.6);
+  backdrop-filter: blur(6px);
+}
+
+/* While the map is open, the chat/header/input containers themselves
+   must not capture mouse events in their empty space — only the
+   actual interactive bits inside them should. Everything else falls
+   through to the map underneath, so drag/zoom works anywhere. */
+body.map-open .header,
+body.map-open .chat-area,
+body.map-open .input-area {
+  pointer-events: none;
+}
+
+body.map-open .header *,
+body.map-open .chat-area .msg,
+body.map-open .input-area * {
+  pointer-events: auto;
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.input-wrap input[type="text"] {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ececec;
+  font-size: 15px;
+}
+
+.input-wrap input[type="text"]::placeholder {
+  color: #666;
+}
+
+.input-wrap button {
+  background: #4a4a4a;
+  border: none;
+  border-radius: 8px;
+  color: #ececec;
+  padding: 6px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.input-wrap button:hover {
+  background: #555;
+}
+
+.upload-btn {
+  background: none;
+  border: none;
+  color: #ececec;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.upload-btn:hover {
+  color: #aaa;
+}
+
+.image-preview-wrap {
+  display: none;
+  position: relative;
+  width: fit-content;
+}
+
+.image-preview-wrap img {
+  height: 60px;
+  border-radius: 8px;
+  display: block;
+}
+
+.image-preview-wrap .remove-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #555;
+  border: none;
+  color: #ececec;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.msg img {
+  max-width: 100%;
+  border-radius: 10px;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.map-toggle-btn {
+  background: #2f2f2f;
+  border: 1px solid #3e3e3e;
+  border-radius: 12px;
+  padding: 8px 14px;
+  color: #ececec;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.map-toggle-btn:hover {
+  background: #3a3a3a;
+}
+
+.map-zoom-controls {
+  display: none;
+  gap: 6px;
+}
+
+body.map-open .map-zoom-controls {
+  display: flex;
+}
+
+.map-zoom-controls button {
+  width: 36px;
+  height: 36px;
+  background: #2f2f2f;
+  border: 1px solid #3e3e3e;
+  border-radius: 10px;
+  color: #ececec;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.map-zoom-controls button:hover {
+  background: #3a3a3a;
+}
+
+/* The map sits as a fixed full-screen background behind the chat UI */
+#map {
+  display: none;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #0d0d0d;
+  z-index: 1;
+}
+
+body.map-open #map {
+  display: block;
+}
+
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+.flight-marker-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  border: 1px solid;
+  box-shadow: 0 0 4px rgba(0,0,0,0.5);
+  transition: transform 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transform-origin: center;
+}
+
+.flight-marker-icon.departure {
+  background: rgba(58, 134, 255, 0.9);
+  border-color: #3a86ff;
+}
+
+.flight-marker-icon.arrival {
+  background: rgba(255, 99, 72, 0.9);
+  border-color: #ff6348;
+}
+
+.flight-marker-icon.landed {
+  background: rgba(46, 204, 113, 0.9);
+  border-color: #2ecc71;
+}
+
+.flight-marker-icon.highlighted {
+  transform: scale(1.7);
+  background: #9b59b6 !important;
+  border-color: #c896f0 !important;
+  box-shadow: 0 0 10px rgba(155, 89, 182, 0.9);
+  z-index: 1000;
+}
+
+@keyframes liveRing {
+  0%   { transform: scale(1);   opacity: 0.8; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+
+.flight-marker-icon.highlighted::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid #c896f0;
+  animation: liveRing 1.4s ease-out infinite;
+  pointer-events: none;
+}
+
+/* Points north (up) at 0deg; rotated per-flight to match its actual heading */
+.flight-arrow {
+  width: 12px;
+  height: 12px;
+  transform-origin: 50% 50%;
+  transition: transform 0.4s;
+}
+
+.flight-tooltip {
+  background: #1e1e1e;
+  color: #ececec;
+  border: 1px solid #3e3e3e;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.airport-label {
+  background: rgba(155, 89, 182, 0.9);
+  color: #fff;
+  border: 1px solid #c896f0;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.airport-label::before {
+  border-top-color: rgba(155, 89, 182, 0.9) !important;
+}
+
+.map-legend {
+  display: none;
+  position: fixed;
+  bottom: 12px;
+  left: 16px;
+  z-index: 1001;
+  background: rgba(22, 22, 22, 0.9);
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+  color: #ececec;
+  flex-direction: column;
+  gap: 2px;
+}
+
+body.map-open .map-legend {
+  display: flex;
+}
+
+.map-legend .legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.map-legend .dot.departure { background: #3a86ff; }
+.map-legend .dot.arrival { background: #ff6348; }
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #2e2e2e;
+  font-size: 11px;
+  color: #7bed7b;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.live-badge .live-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #7bed7b;
+  animation: livePulse 1.4s ease-in-out infinite;
+}
+
+.map-toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  z-index: 1001;
+  background: rgba(22, 22, 22, 0.95);
+  border: 1px solid #3e3e3e;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #ececec;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.map-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.chat-toggle-btn {
+  background: #2f2f2f;
+  border: 1px solid #3e3e3e;
+  border-radius: 12px;
+  padding: 8px 14px;
+  color: #ececec;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-toggle-btn:hover { background: #3a3a3a; }
+
+body.chat-hidden .chat-area,
+body.chat-hidden .input-area {
+  display: none;
+}
+
+body.chat-hidden.map-open .header {
+  pointer-events: none;
+}
+
+body.chat-hidden.map-open .header * {
+  pointer-events: auto;
+}
+
+/* Flight dashboard panel */
+#flight-dashboard {
+  display: none;
+  position: fixed;
+  top: 76px;
+  right: 16px;
+  z-index: 1002;
+  width: 260px;
+  background: rgba(18, 18, 18, 0.96);
+  border: 1px solid #2e2e2e;
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  backdrop-filter: blur(8px);
+  color: #ececec;
+  font-size: 13px;
+  pointer-events: auto;
+  transform: translateX(20px);
+  opacity: 0;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+#flight-dashboard.visible {
+  display: block;
+  transform: translateX(0);
+  opacity: 1;
+}
+
+#flight-dashboard.animating {
+  display: block;
+}
+
+.fd-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.fd-flight-id {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.fd-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: rgba(123, 237, 123, 0.15);
+  color: #7bed7b;
+  border: 1px solid rgba(123, 237, 123, 0.3);
+}
+
+.fd-close-btn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 0 0 6px;
+}
+
+.fd-close-btn:hover { color: #aaa; }
+
+.fd-route {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ececec;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fd-route-arrow {
+  color: #666;
+  font-size: 12px;
+}
+
+.fd-divider {
+  border: none;
+  border-top: 1px solid #2e2e2e;
+  margin: 10px 0;
+}
+
+.fd-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 8px;
+}
+
+.fd-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fd-stat-label {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.fd-stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ececec;
+}
+
+.fd-stat-value.muted {
+  color: #555;
+}
+
+.fd-coords {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fd-direction {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #888;
+  margin-bottom: 4px;
+  margin-top: -4px;
+}
+
+.fd-pin-hint {
+  margin-top: 10px;
+  font-size: 10px;
+  color: #444;
+  text-align: center;
+  letter-spacing: 0.05em;
+  transition: opacity 0.2s;
+}
+
+#flight-dashboard.pinned .fd-pin-hint {
+  display: none;
+}
+
+.fd-trend {
+  font-size: 11px;
+  margin-left: 3px;
+  font-weight: 700;
+}
+.fd-trend.up   { color: #7bed7b; }
+.fd-trend.down { color: #ff6348; }
+.fd-trend.flat { color: #666; }
+
+.fd-weather {
+  margin-top: 4px;
+}
+
+.fd-weather-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.fd-weather-label {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.fd-weather-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ececec;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fd-progress-wrap {
+  margin-top: 4px;
+}
+
+.fd-progress-track {
+  position: relative;
+  height: 3px;
+  background: #9b59b6;
+  border-radius: 2px;
+  margin: 6px 0 8px;
+}
+
+.fd-progress-done {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 2px 0 0 2px;
+  transition: width 0.4s ease;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(155, 89, 182, 0.35) 0px,
+    rgba(155, 89, 182, 0.35) 5px,
+    rgba(155, 89, 182, 0.07) 5px,
+    rgba(155, 89, 182, 0.07) 11px
+  );
+}
+
+.fd-progress-plane {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transition: left 0.4s ease;
+  line-height: 0;
+  filter: drop-shadow(0 0 3px rgba(200, 150, 240, 0.7));
+}
+
+.fd-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #666;
+  letter-spacing: 0.03em;
+}
+
+.fd-progress-labels span:nth-child(2) {
+  color: #999;
+  font-weight: 600;
+}
+
+/* IST terminal overlay tooltip */
+.ist-tooltip {
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid #555;
+  color: #aaa;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.ist-tooltip::before { display: none; }
+#map.ist-active .ist-tooltip {
+  background: rgba(30, 15, 60, 0.92);
+  border-color: #7c3aed;
+  color: #c4b5fd;
+}
+
