@@ -1,5 +1,16 @@
 """Shared terminal styling for TrackIST workers."""
 import datetime
+import sys
+
+# Windows consoles default to a legacy code page (cp1254 on Turkish systems)
+# that can't encode the box-drawing/arrow characters used below — crash on
+# the very first banner. Force UTF-8, degrade gracefully where impossible.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 R   = "\033[0m"
 B   = "\033[1m"
