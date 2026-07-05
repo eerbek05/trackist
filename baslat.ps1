@@ -22,10 +22,13 @@ $running = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Where-Object { $_.CommandLine -match [regex]::Escape($root) }
 
 function Start-IfMissing($script) {
-    if ($running | Where-Object { $_.CommandLine -match [regex]::Escape($script) }) {
+    # Absolute script path: the command line must contain the project root so
+    # both this duplicate check and durdur.ps1's filter can find the process.
+    $full = Join-Path $root $script
+    if ($running | Where-Object { $_.CommandLine -match [regex]::Escape($full) }) {
         Write-Host "$script zaten calisiyor."
     } else {
-        Start-Process -FilePath "python" -ArgumentList "-u", $script `
+        Start-Process -FilePath "python" -ArgumentList "-u", "`"$full`"" `
             -WorkingDirectory $root -WindowStyle Minimized
         Write-Host "$script baslatildi."
     }
