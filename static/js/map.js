@@ -151,25 +151,35 @@ function makeFlightIcon(direction, heading) {
 }
 
 function highlightMarker(marker) {
+  // No DOM re-parenting here: moving the element while the pointer is over
+  // it resets the browser's hover state, the pending mouseout never fires,
+  // and hovered markers stay purple forever. A z-index bump raises the
+  // marker above its neighbors without touching its place in the DOM.
   const el = marker.getElement();
   const inner = el && el.querySelector('.flight-marker-icon');
   if (inner) inner.classList.add('highlighted');
-  const activePane = flightMap && flightMap.getPane('activeMarkerPane');
-  if (el && activePane) activePane.appendChild(el);
+  marker.setZIndexOffset(10000);
 }
 
 function unhighlightMarker(marker) {
   const el = marker.getElement();
   const inner = el && el.querySelector('.flight-marker-icon');
   if (inner) inner.classList.remove('highlighted');
+  marker.setZIndexOffset(0);
   const markerPane = flightMap && flightMap.getPane('markerPane');
-  if (el && markerPane) markerPane.appendChild(el);
+  if (el && markerPane && el.parentElement !== markerPane) markerPane.appendChild(el);
 }
 
 function setActiveMarker(marker) {
   if (activeMarker && activeMarker !== marker) unhighlightMarker(activeMarker);
   activeMarker = marker;
   highlightMarker(marker);
+  // Lifting into the pane above the route lines is safe on click: mouseout
+  // is a no-op for the active marker, so the hover-state reset caused by
+  // re-parenting can't strand a highlight here.
+  const el = marker.getElement();
+  const activePane = flightMap && flightMap.getPane('activeMarkerPane');
+  if (el && activePane) activePane.appendChild(el);
   drawSplitRoute(marker._flightId);
 }
 
