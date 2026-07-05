@@ -46,6 +46,19 @@ app.config["SESSION_TYPE"] = "filesystem"
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 Session(app)
 
+# Cache-busting version for static assets — changes on every app start, so a
+# stale (or half-downloaded) cached bundle can't survive a restart. A partial
+# index.html once stuck in the browser cache and broke the map in ways that
+# looked like application bugs.
+ASSET_VERSION = str(int(__import__("time").time()))
+
+
+@app.after_request
+def _never_cache_shell(resp):
+    if request.path == "/":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
 
 def _ensure_thread_id():
     if "thread_id" not in session:
@@ -69,7 +82,7 @@ def index():
     thread_id = _ensure_thread_id()
     # Chat history is rendered from the agent's own conversation memory —
     # single source of truth, works for both /chat and /chat/stream.
-    return render_template("index.html", history=get_history(thread_id))
+    return render_template("index.html", history=get_history(thread_id), v=ASSET_VERSION)
 
 @app.route("/chat", methods=["POST"])
 def chat():
