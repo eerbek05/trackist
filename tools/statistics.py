@@ -15,7 +15,7 @@ _airports_df = None
 def get_airport_coords(iata_code):
     global _airports_df
     if _airports_df is None:
-        csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "airports.csv")
+        csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "airports.csv")
         _airports_df = pd.read_csv(csv_path)
 
     row = _airports_df[_airports_df["iata_code"] == iata_code]
@@ -33,7 +33,7 @@ def get_airport_info(iata_code):
     # used to label departure/arrival airports on the map.
     global _airports_df
     if _airports_df is None:
-        csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "airports.csv")
+        csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "airports.csv")
         _airports_df = pd.read_csv(csv_path)
 
     row = _airports_df[_airports_df["iata_code"] == iata_code]

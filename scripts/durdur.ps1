@@ -3,7 +3,8 @@
 # PostgreSQL'e dokunmaz (zararsizdir); onu da kapatmak icin -Db ekleyin.
 param([switch]$Db)
 
-$root = $PSScriptRoot
+# Scripts live in scripts/; match python processes started from the project root one level up.
+$root = Split-Path $PSScriptRoot -Parent
 
 $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Where-Object { $_.CommandLine -match [regex]::Escape($root) }

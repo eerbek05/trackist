@@ -10,4 +10,3 @@ flask_session/
 .pytest_cache/
 .DS_Store
 test.py
-agentic-ai-proje-notlari.md

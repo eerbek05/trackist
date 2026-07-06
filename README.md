@@ -115,7 +115,7 @@ against mocked connections.
 
 ## 🖥️ Running without Docker
 
-Requires a local PostgreSQL (`createdb trackist && psql -d trackist -f init.sql`) and
+Requires a local PostgreSQL (`createdb trackist && psql -d trackist -f database/init.sql`) and
 `DATABASE_URL` in `.env`:
 
 ```bash

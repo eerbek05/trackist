@@ -2,7 +2,8 @@
 # PostgreSQL + AirLabs poller + OpenSky pozisyon worker'i + web uygulamasi.
 # Her bilesen kendi minimize penceresinde calisir; durdurmak icin: durdur.ps1
 
-$root  = $PSScriptRoot
+# Scripts live in scripts/; the project root (app.py, workers/) is one level up.
+$root  = Split-Path $PSScriptRoot -Parent
 $pgbin = "C:\Program Files\PostgreSQL\16\bin"
 $data  = "$env:LOCALAPPDATA\TrackIST\pgdata"
 
