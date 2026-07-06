@@ -5,6 +5,8 @@ Ask it anything about IST traffic — in Turkish or English — from *"TK12 nere
 *"What's the weather in the departure city of the highest flight right now?"*, or just
 snap a photo of your boarding pass and let it find your flight.
 
+![TrackIST — live map with a highlighted route and flight detail panel](docs/map-route.png)
+
 ## What it does
 
 - **Live map** (Leaflet) — every IST arrival/departure with position, heading, and route;
@@ -15,7 +17,11 @@ snap a photo of your boarding pass and let it find your flight.
 - **Boarding-pass reading** — upload a photo; a vision model extracts the flight, gate and
   seat, and the chat picks it up as context ("is my seat a window seat?").
 - **Answers in your language** — deterministic Turkish/English detection enforces the
-  reply language per message; time zones are computed in code (never by the LLM).
+  reply language per message; Turkish is understood with or without diacritics
+  (*"en yuksekte ucan ucak"* routes the same as *"en yüksekte uçan uçak"*); time zones
+  are computed in code (never by the LLM).
+
+![The assistant answering a scheduled-arrival question in UTC and airport-local time](docs/agent-schedule.png)
 
 ## Architecture
 
@@ -39,11 +45,17 @@ AirLabs API (hourly)          OpenSky ADS-B (every 60s)
                      → LLM-free raw-data answers as the last resort
 ```
 
-The provider chain is the interesting part: every provider is free-tier, each 429 is
-classified (per-minute vs. daily/monthly bucket) and the provider is benched for a
-matching cooldown, so a burst on one provider never takes the product down. If *every*
-LLM is rate-limited, the most common intents (single flight, delays, arrivals/departures,
-airborne count) are still answered from raw tool output.
+The provider chain is the interesting part: every provider is free-tier, and each failure
+is classified rather than bubbled up. A rate-limit or overload (429/503) benches the
+provider for a cooldown matched to the bucket that tripped — per-minute limits recover in
+~75s, daily/monthly ones back off for 30 min — so a burst on one provider never takes the
+product down. Failover is immediate: the SDKs' own retry/backoff is disabled (a single
+in-SDK retry could otherwise sleep on a provider's `Retry-After` for a full minute), and
+the chain *is* the retry. Provider-specific quirks are absorbed too — one model's malformed
+history artifacts are sanitized out of the shared conversation thread before the next
+provider sees it, so a single bad turn can't poison the thread. If *every* LLM is
+unavailable, the most common intents (single flight, delays, arrivals/departures, airborne
+count) are still answered from raw tool output.
 
 ## Quick start (Docker)
 
@@ -118,7 +130,7 @@ app.py                       Flask routes: chat (SSE), map API, boarding-pass an
 agent/motor.py               ReAct agent, 15 tools, provider chain, streaming
 agent/router.py              simple/complex routing (incl. chain-query detection)
 agent/language.py            deterministic TR/EN detection → per-message language tag
-agent/llm_state.py           shared provider cooldowns (429 classification)
+agent/llm_state.py           shared provider cooldowns (429/503 classification)
 tools/                       DB queries, statistics, text-to-SQL, weather, timezones
 workers/poller.py            AirLabs → Postgres (hourly), status sanity correction
 workers/opensky_position.py  OpenSky ADS-B → live positions (60s)
