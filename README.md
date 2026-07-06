@@ -1,5 +1,10 @@
 # TrackIST ✈️
 
+![Python](https://img.shields.io/badge/python-3.12-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen.svg)
+![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)
+
 Real-time flight tracking and a conversational AI assistant for **Istanbul Airport (IST)**.
 Ask it anything about IST traffic — in Turkish or English — from *"TK12 nerede?"* to
 *"What's the weather in the departure city of the highest flight right now?"*, or just
@@ -7,7 +12,9 @@ snap a photo of your boarding pass and let it find your flight.
 
 ![TrackIST — live map with a highlighted route and flight detail panel](docs/map-route.png)
 
-## What it does
+*The live map — every IST arrival and departure, with a selected flight's route and detail panel.*
+
+## ✨ What it does
 
 - **Live map** (Leaflet) — every IST arrival/departure with position, heading, and route;
   terminal-building overlay when you zoom into IST; ground-traffic view from ADS-B.
@@ -23,7 +30,9 @@ snap a photo of your boarding pass and let it find your flight.
 
 ![The assistant answering a scheduled-arrival question in UTC and airport-local time](docs/agent-schedule.png)
 
-## Architecture
+*The assistant resolves airport-local times in code — never by the LLM — and answers in the question's language.*
+
+## 🏗️ Architecture
 
 ```
 AirLabs API (hourly)          OpenSky ADS-B (every 60s)
@@ -45,19 +54,15 @@ AirLabs API (hourly)          OpenSky ADS-B (every 60s)
                      → LLM-free raw-data answers as the last resort
 ```
 
-The provider chain is the interesting part: every provider is free-tier, and each failure
-is classified rather than bubbled up. A rate-limit or overload (429/503) benches the
-provider for a cooldown matched to the bucket that tripped — per-minute limits recover in
-~75s, daily/monthly ones back off for 30 min — so a burst on one provider never takes the
-product down. Failover is immediate: the SDKs' own retry/backoff is disabled (a single
-in-SDK retry could otherwise sleep on a provider's `Retry-After` for a full minute), and
-the chain *is* the retry. Provider-specific quirks are absorbed too — one model's malformed
-history artifacts are sanitized out of the shared conversation thread before the next
-provider sees it, so a single bad turn can't poison the thread. If *every* LLM is
-unavailable, the most common intents (single flight, delays, arrivals/departures, airborne
-count) are still answered from raw tool output.
+The provider chain is the interesting part. Every provider is free-tier, so each failure is
+classified instead of surfaced: a 429/503 benches that provider for a cooldown matched to the
+bucket that tripped (~75s for per-minute limits, 30 min for daily ones), and the chain moves
+on immediately — SDK retries are disabled, so no request stalls on a provider's `Retry-After`.
+One model's malformed history can't poison the shared thread either; it's sanitized before the
+next provider sees it. And if *every* LLM is down, the most common intents (single flight,
+delays, arrivals/departures, airborne count) are still answered from raw tool output.
 
-## Quick start (Docker)
+## 🚀 Quick start (Docker)
 
 ```bash
 cp .env.example .env    # fill in your keys — see the table below
@@ -66,7 +71,7 @@ docker compose up --build
 
 Open **http://localhost:5001**. `make down` stops everything, `make logs` tails logs.
 
-## Environment variables
+## 🔑 Environment variables
 
 | Variable | Required | Used for |
 |---|---|---|
@@ -82,7 +87,7 @@ Open **http://localhost:5001**. `make down` stops everything, `make logs` tails 
 
 The chain simply skips providers whose keys are missing.
 
-## Evals — measuring the chatbot instead of guessing
+## 📊 Evals — measuring the chatbot instead of guessing
 
 `evals/` contains 27 golden questions (Turkish/English pairs across every feature) with
 deterministic DB fixtures, scored on three axes: **content** (expected facts present),
@@ -98,7 +103,7 @@ python evals/run_evals.py --sleep 15  # live run against the real agent
 Latest full run: **content 26/27 · language 27/27 · no-leak 27/27** (the one miss was an
 over-strict expectation, since relaxed). The runner refuses to start on stale fixtures.
 
-## Tests
+## 🧪 Tests
 
 ```bash
 python -m pytest test.py -v    # 108 tests, no live DB or API calls needed
@@ -108,7 +113,7 @@ Covers the SQL-injection guard, airport/timezone lookups, staleness logic (UTC-s
 router classification incl. chain queries, language detection, and the DB query layer
 against mocked connections.
 
-## Running without Docker
+## 🖥️ Running without Docker
 
 Requires a local PostgreSQL (`createdb trackist && psql -d trackist -f init.sql`) and
 `DATABASE_URL` in `.env`:
@@ -123,7 +128,7 @@ python app.py                        # terminal 3 — http://localhost:5001
 > Windows + Turkish locale note: initialize the cluster with `initdb --locale=C`
 > (the default Turkish locale name contains non-ASCII characters and breaks initdb).
 
-## Project layout
+## 📁 Project layout
 
 ```
 app.py                       Flask routes: chat (SSE), map API, boarding-pass analysis
@@ -139,10 +144,14 @@ evals/                       golden dataset + fixtures + scorer
 templates/ static/           chat UI + Leaflet map
 ```
 
-## Honest limitations
+## ⚠️ Honest limitations
 
 - Positions are as fresh as the sources: 60s where OpenSky coverage exists, hourly
   otherwise. Arrival estimates are great-circle at current speed — treat as rough.
 - All LLM providers run on free tiers; heavy traffic degrades gracefully to raw-data
   answers rather than failing, but sustained production use deserves one paid key.
 - Single-table snapshot model: no historical tracks, one row per flight number.
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).
