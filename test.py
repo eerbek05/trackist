@@ -676,3 +676,169 @@ def test_scheduled_times_no_data(mock_get_db):
 def test_scheduled_times_unknown_flight(mock_get_db):
     mock_get_db.return_value = _mock_db([])
     assert get_scheduled_times("ZZ999") is None
+
+
+# ============================================================
+# agent.llm_state — quota-aware provider cooldowns (429/503)
+# ============================================================
+# The reliability core: a failing provider is benched (not surfaced), and
+# the *kind* of failure decides for how long. These lock in the exact
+# classification the failover chain depends on — a misclassification here
+# would either bench a healthy provider for 30 min or hammer a dead one
+# every 75s all day.
+
+import agent.llm_state as llm_state_mod
+
+
+@pytest.mark.parametrize("error_str", [
+    "Error code: 429 - too many requests",
+    "rate_limit_exceeded",
+    "RATE LIMIT reached",                                  # case-insensitive
+    "quota exceeded for this model",
+    "resource_exhausted",
+    "This model is currently experiencing high demand",   # Gemini 503 wording
+    "503 Service Unavailable",
+    "The model is overloaded, please try again",
+    "server temporarily unavailable",
+])
+def test_looks_like_rate_limit_true(error_str):
+    assert llm_state_mod.looks_like_rate_limit(error_str) is True
+
+
+@pytest.mark.parametrize("error_str", [
+    "400 Bad Request: invalid tool schema",
+    "AuthenticationError: invalid api key",
+    "ValueError: something unrelated broke",
+    "",
+])
+def test_looks_like_rate_limit_false(error_str):
+    # A non-transient error must NOT be treated as "busy" — otherwise a real
+    # bug (bad schema, wrong key) would be silently swallowed by failover.
+    assert llm_state_mod.looks_like_rate_limit(error_str) is False
+
+
+def test_is_exhausted_unknown_provider_is_false():
+    assert llm_state_mod.is_exhausted("provider-never-benched") is False
+
+
+def test_per_minute_429_uses_short_cooldown():
+    ls = llm_state_mod
+    with patch("agent.llm_state.time.time", return_value=1000.0):
+        ls.mark_exhausted("t_short", "Error 429: rate limit, requests per minute exceeded")
+    with patch("agent.llm_state.time.time", return_value=1000.0 + ls.SHORT_COOLDOWN - 1):
+        assert ls.is_exhausted("t_short") is True     # still benched inside the window
+    with patch("agent.llm_state.time.time", return_value=1000.0 + ls.SHORT_COOLDOWN + 1):
+        assert ls.is_exhausted("t_short") is False    # recovered just after
+
+
+def test_daily_quota_uses_long_cooldown():
+    ls = llm_state_mod
+    with patch("agent.llm_state.time.time", return_value=2000.0):
+        ls.mark_exhausted("t_long", "Rate limit reached on tokens per day (TPD)")
+    # a short cooldown would already have expired here — a daily quota must not
+    with patch("agent.llm_state.time.time", return_value=2000.0 + ls.SHORT_COOLDOWN + 5):
+        assert ls.is_exhausted("t_long") is True
+    with patch("agent.llm_state.time.time", return_value=2000.0 + ls.LONG_COOLDOWN + 1):
+        assert ls.is_exhausted("t_long") is False
+
+
+def test_gemini_billing_message_uses_long_cooldown():
+    # Gemini's free-tier daily limit says "check your plan and billing", with
+    # no "per day" text — it must still trigger the long cooldown.
+    ls = llm_state_mod
+    with patch("agent.llm_state.time.time", return_value=3000.0):
+        ls.mark_exhausted("t_gem", "429 exceeded quota, check your plan and billing details")
+    with patch("agent.llm_state.time.time", return_value=3000.0 + ls.SHORT_COOLDOWN + 5):
+        assert ls.is_exhausted("t_gem") is True
+
+
+# ============================================================
+# agent.motor — shared-thread sanitization & reasoning stripping
+# ============================================================
+# Imported lazily so the (heavier) agent module only loads if these run.
+
+def _motor():
+    import agent.motor as m
+    return m
+
+
+def test_sanitize_history_drops_empty_assistant_messages():
+    # One provider's failed turn can leave a contentless assistant message
+    # that others (Mistral 3240) reject wholesale.
+    from langchain_core.messages import HumanMessage, AIMessage
+    m = _motor()
+    msgs = [HumanMessage(content="TK1 nerede?"),
+            AIMessage(content=""),
+            AIMessage(content="TK1 en route to JFK.")]
+    out = m._sanitize_history({"messages": msgs})["llm_input_messages"]
+    assert len(out) == 2
+    assert not any(isinstance(x, AIMessage) and not x.content and not x.tool_calls for x in out)
+
+
+def test_sanitize_history_dedupes_tool_calls_and_results():
+    # A bad chunk merge can duplicate a tool_call id (Mistral 3230), which
+    # then poisons the thread for that provider permanently.
+    from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+    m = _motor()
+    ai = AIMessage(content="", tool_calls=[
+        {"name": "get_flight_by_id", "args": {"flight_id": "TK1"}, "id": "call_a"},
+        {"name": "get_flight_by_id", "args": {"flight_id": "TK1"}, "id": "call_a"},
+    ])
+    t1 = ToolMessage(content="result 1", tool_call_id="call_a")
+    t2 = ToolMessage(content="result 2", tool_call_id="call_a")
+    out = m._sanitize_history({"messages": [HumanMessage(content="q"), ai, t1, t2]})["llm_input_messages"]
+    kept_ai = [x for x in out if isinstance(x, AIMessage)]
+    kept_tool = [x for x in out if isinstance(x, ToolMessage)]
+    assert len(kept_ai[0].tool_calls) == 1
+    assert len(kept_tool) == 1
+
+
+def test_sanitize_history_keeps_normal_conversation_intact():
+    from langchain_core.messages import HumanMessage, AIMessage
+    m = _motor()
+    msgs = [HumanMessage(content="TK1 nerede?"), AIMessage(content="TK1 JFK'e gidiyor.")]
+    out = m._sanitize_history({"messages": msgs})["llm_input_messages"]
+    assert len(out) == 2
+
+
+@pytest.mark.parametrize("text,must_have,must_not_have", [
+    ("Let me check the flights. TK1 is at 35000 ft.", "TK1 is at 35000 ft.", "Let me check"),
+    ("tool_get_flight_by_id kullanacağım. TK1 35000 fitte.", "35000 fitte", "kullanacağım"),
+])
+def test_strip_reasoning_removes_thinking_keeps_answer(text, must_have, must_not_have):
+    m = _motor()
+    out = m._strip_reasoning(text)
+    assert must_have in out
+    assert must_not_have not in out
+
+
+def test_strip_reasoning_leaves_clean_answer_untouched():
+    m = _motor()
+    clean = "TK1 is en route to JFK at 35000 ft."
+    assert m._strip_reasoning(clean) == clean
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("plain string", "plain string"),
+    ([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}], "ab"),
+    ([], ""),
+    (12345, ""),
+])
+def test_text_from_content(content, expected):
+    m = _motor()
+    assert m._text_from_content(content) == expected
+
+
+# ============================================================
+# router.detect_complexity — diacritic-insensitive chain queries
+# ============================================================
+# Turkish is typed both with and without diacritics; a chain query must be
+# recognized either way (this regressed for the diacritic-free form before).
+
+@pytest.mark.parametrize("question", [
+    "en yuksekte ucan ucak nereye inecek",
+    "en hizli ucak ne zaman iner",
+    "en yuksekte ucan ucagin gidecegi sehirde hava nasil",
+])
+def test_router_chain_query_diacritic_insensitive(detect_complexity, question):
+    assert detect_complexity(question) == "complex"

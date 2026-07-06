@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-138%20passing-brightgreen.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)
 
 Real-time flight tracking and a conversational AI assistant for **Istanbul Airport (IST)**.
@@ -106,12 +106,14 @@ over-strict expectation, since relaxed). The runner refuses to start on stale fi
 ## 🧪 Tests
 
 ```bash
-python -m pytest test.py -v    # 108 tests, no live DB or API calls needed
+python -m pytest test.py -v    # 138 tests, no live DB or API calls needed
 ```
 
 Covers the SQL-injection guard, airport/timezone lookups, staleness logic (UTC-safe),
-router classification incl. chain queries, language detection, and the DB query layer
-against mocked connections.
+router classification incl. diacritic-insensitive chain queries, language detection, and
+the DB query layer against mocked connections — plus the reliability core: the provider
+cooldown classifier (per-minute 429 vs. daily quota vs. 503/overload) and the shared-thread
+sanitizer that keeps one model's malformed history from poisoning the next.
 
 ## 🖥️ Running without Docker
 
