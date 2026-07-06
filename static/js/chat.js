@@ -35,6 +35,22 @@ function showMapToast(message) {
   toastTimeout = setTimeout(() => toast.classList.remove('visible'), 3000);
 }
 
+// ---- Safe markdown for assistant messages ----
+// LLM output is untrusted, so escape HTML first, then render a small, safe
+// subset: **bold**, a line break after each sentence (. ! ?) — but never
+// inside a decimal like 24.9 — and the model's own newlines, which plain
+// textContent was collapsing into spaces (the main cause of the wall-of-text).
+function renderMarkdown(text) {
+  const esc = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return esc
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/([A-Za-zÇĞİÖŞÜçğıöşü][.!?])\s+(?=[A-ZÇĞİÖŞÜ])/g, '$1<br>')
+    .replace(/\n/g, '<br>');
+}
+
 // ---- Flight focus ----
 function extractFlightCode(text) {
   const match = text.match(/\b([A-Z]{2,3}\s?\d{1,4})\b/);
@@ -139,7 +155,7 @@ async function sendImage(file) {
   const response = await fetch('/analyze', { method: 'POST', body: formData });
   const data     = await response.json();
 
-  document.getElementById('thinking').textContent = data.cevap;
+  document.getElementById('thinking').innerHTML = renderMarkdown(data.cevap);
   document.getElementById('thinking').removeAttribute('id');
   chat.scrollTop = chat.scrollHeight;
 
@@ -210,7 +226,7 @@ document.getElementById('chatForm').addEventListener('submit', async function(e)
         if (data.type === 'token' && data.text) {
           if (!hasText) { responseDiv.textContent = ''; hasText = true; }
           fullText += data.text;
-          responseDiv.textContent = fullText;
+          responseDiv.innerHTML = renderMarkdown(fullText);
           chat.scrollTop = chat.scrollHeight;
 
         } else if (data.type === 'tool' && !hasText) {
