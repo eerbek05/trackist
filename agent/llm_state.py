@@ -21,7 +21,10 @@ _exhausted_until = {}  # provider name -> unix timestamp
 SHORT_COOLDOWN = 75
 LONG_COOLDOWN = 30 * 60
 
-_LONG_MARKERS = ("per day", "tpd", "rpd", "perday", "month", "daily")
+# "check your plan and billing" is Gemini's free-tier *daily* quota message —
+# without it the provider would be retried every 75s all day long.
+_LONG_MARKERS = ("per day", "tpd", "rpd", "perday", "month", "daily",
+                 "check your plan and billing")
 
 
 def is_exhausted(provider: str) -> bool:
@@ -45,5 +48,13 @@ def mark_cohere_exhausted():
 
 
 def looks_like_rate_limit(error_str: str) -> bool:
+    """True for any 'provider is busy right now' error — not just 429s.
+    503/overloaded responses recover the same way (wait and retry later),
+    so they get the same treatment: bench the provider, move down the chain."""
     s = error_str.lower()
-    return any(k in s for k in ("429", "rate_limit", "trial key", "rate limit", "quota", "resource_exhausted", "resource has been exhausted"))
+    return any(k in s for k in (
+        "429", "rate_limit", "trial key", "rate limit", "quota",
+        "resource_exhausted", "resource has been exhausted",
+        "503", "high demand", "overloaded", "service unavailable",
+        "temporarily unavailable", "over capacity",
+    ))
