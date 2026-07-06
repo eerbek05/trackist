@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 from langchain_cohere import ChatCohere
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk
+from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from tools.direct_query import (
@@ -49,11 +49,14 @@ llm_simple = ChatCohere(
     temperature=0
 )
 
+# max_retries=0 on every chain member: providers send Retry-After headers
+# (Cerebras: 60s) and the SDKs sleep on them before retrying — one in-SDK
+# retry can stall a request a full minute. Failover *is* our retry.
 llm_complex = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
     model="llama-3.3-70b-versatile",
     temperature=0,
-    max_retries=1,
+    max_retries=0,
     request_timeout=30,
 )
 
@@ -61,14 +64,14 @@ llm_complex = ChatGroq(
 # without GOOGLE_API_KEY the chain simply doesn't include it.
 # Default model is flash-lite: on the free tier the full 2.5-flash is capped
 # at ~20 requests/DAY, which one agent conversation can burn; flash-lite's
-# bucket is far larger. max_retries=1 because on 429 we want to fall through
+# bucket is far larger. max_retries=0 because on 429 we want to fall through
 # to the next provider immediately, not sit in exponential backoff.
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 llm_gemini = None
 if os.getenv("GOOGLE_API_KEY"):
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
-        llm_gemini = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0, max_retries=1, timeout=30)
+        llm_gemini = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0, max_retries=0, timeout=30)
     except Exception as _e:
         logger.warning(f"Gemini kullanılamıyor: {_e}")
 
@@ -84,7 +87,7 @@ if os.getenv("CEREBRAS_API_KEY"):
             base_url="https://api.cerebras.ai/v1",
             api_key=os.getenv("CEREBRAS_API_KEY"),
             model=CEREBRAS_MODEL,
-            temperature=0, max_retries=1, timeout=30,
+            temperature=0, max_retries=0, timeout=30,
         )
     except Exception as _e:
         logger.warning(f"Cerebras kullanılamıyor: {_e}")
@@ -98,7 +101,7 @@ if os.getenv("MISTRAL_API_KEY"):
         llm_mistral = ChatMistralAI(
             api_key=os.getenv("MISTRAL_API_KEY"),
             model=MISTRAL_MODEL,
-            temperature=0, max_retries=1, timeout=30,
+            temperature=0, max_retries=0, timeout=30,
         )
     except Exception as _e:
         logger.warning(f"Mistral kullanılamıyor: {_e}")
@@ -451,6 +454,8 @@ Start your answer directly. NEVER write your reasoning steps, tool selection pro
 TIME RULE:
 Tool results already include airport-local times next to UTC where available. Use them as given.
 NEVER compute timezone conversions yourself. If a tool gives only UTC, present it as UTC and say so.
+All times coming from query_database (departure, arrival, estimates) are UTC — label them "UTC",
+never as local time of any city.
 
 Tool selection order:
 1. Flight code present → get_flight_by_id (position/status), get_gate_terminal_baggage
@@ -500,6 +505,39 @@ def _make_checkpointer():
 
 memory = _make_checkpointer()
 
+def _sanitize_history(state):
+    """One provider's failed or half-merged run can leave artifacts in the
+    shared thread history that another provider then rejects wholesale.
+    Seen in production, both from Mistral: an assistant message with neither
+    content nor tool_calls (error 3240), and one carrying the same tool call
+    id twice from a bad chunk merge (error 3230) — the latter poisons the
+    thread permanently. Filter the LLM *input* only; the checkpointed state
+    stays as-is."""
+    cleaned = []
+    seen_tool_results = set()
+    for m in state["messages"]:
+        if isinstance(m, AIMessage):
+            tool_calls = getattr(m, "tool_calls", None) or []
+            if not tool_calls and not _text_from_content(m.content).strip():
+                continue
+            seen_ids, uniq = set(), []
+            for tc in tool_calls:
+                if tc.get("id") in seen_ids:
+                    continue
+                seen_ids.add(tc.get("id"))
+                uniq.append(tc)
+            if len(uniq) != len(tool_calls):
+                m = m.model_copy(update={"tool_calls": uniq})
+        elif isinstance(m, ToolMessage):
+            # Drop the duplicate *results* of any deduped call ids too.
+            tcid = getattr(m, "tool_call_id", None)
+            if tcid in seen_tool_results:
+                continue
+            seen_tool_results.add(tcid)
+        cleaned.append(m)
+    return {"llm_input_messages": cleaned}
+
+
 _agents = {}
 
 def _get_agent(llm):
@@ -509,7 +547,8 @@ def _get_agent(llm):
             model=llm,
             tools=tools,
             checkpointer=memory,
-            prompt=AGENT_PROMPT
+            prompt=AGENT_PROMPT,
+            pre_model_hook=_sanitize_history,
         )
     return _agents[key]
 
@@ -655,8 +694,8 @@ def _busy_message(soru, lang):
     if direct:
         return direct
     if lang == "tr":
-        return "Her iki AI servisi de şu an yoğun. Lütfen birazdan tekrar deneyin."
-    return "Both AI services are currently busy. Please try again in a moment."
+        return "Tüm AI sağlayıcıları şu an yoğun. Lütfen birazdan tekrar deneyin."
+    return "All AI providers are currently busy. Please try again in a moment."
 
 
 def handle_message_stream(soru, thread_id="default"):
@@ -692,6 +731,11 @@ def handle_message_stream(soru, thread_id="default"):
             stream_mode="messages",
         ):
             if not isinstance(chunk, AIMessageChunk):
+                continue
+            # stream_mode="messages" also surfaces LLM calls made *inside*
+            # tools (the text-to-SQL generator) — without this filter their
+            # output (raw SQL) streams to the user as if it were the answer.
+            if metadata.get("langgraph_node") != "agent":
                 continue
 
             for tc in (chunk.tool_call_chunks or []):
@@ -749,9 +793,10 @@ def handle_message_stream(soru, thread_id="default"):
                 return
             if llm_state.looks_like_rate_limit(error_str):
                 llm_state.mark_exhausted(name, error_str)
-                continue
-            yield {"type": "error", "text": error_str}
-            return
+            # Nothing reached the user yet, so *any* failure — quota or a
+            # provider-specific 4xx — is survivable: move down the chain
+            # instead of surfacing a raw API error.
+            continue
 
     # Every provider was rate-limited or produced nothing.
     yield {"type": "token", "text": _busy_message(soru, lang)}
@@ -803,7 +848,10 @@ def handle_message(soru, thread_id="default"):
                 continue
             if "HALLUCINATED_ALL_TOOL_CALLS" in error_str:
                 return "I couldn't understand this question. Please ask something more specific."
-            return f"An error occurred: {error_str}"
+            # Provider-specific failure (e.g. a 4xx over history it can't
+            # parse) — the next provider may still answer; don't surface a
+            # raw API error while the chain has members left.
+            continue
 
     # Every provider was rate-limited or produced nothing.
     return _busy_message(soru, lang)
