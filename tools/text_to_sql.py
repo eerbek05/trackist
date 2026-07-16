@@ -12,7 +12,15 @@ from agent import llm_state
 
 load_dotenv()
 
-co = cohere.ClientV2(os.getenv("COHERE_API_KEY"))
+_cohere_client = None
+
+def _get_cohere():
+    global _cohere_client
+    if _cohere_client is None:
+        _cohere_client = cohere.ClientV2(
+            api_key=os.getenv("COHERE_API_KEY")
+        )
+    return _cohere_client
 
 _groq_client = None
 
@@ -90,7 +98,7 @@ def _clean_llm_sql(sql):
 
 
 def _generate_with_cohere(user_question):
-    response = co.chat(
+    response = _get_cohere().chat(
         model="command-r-plus-08-2024",
         messages=[
             {"role": "system", "content": SQL_SYSTEM_PROMPT},
