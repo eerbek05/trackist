@@ -43,22 +43,32 @@ from langchain_groq import ChatGroq
 
 load_dotenv()
 
-llm_simple = ChatCohere(
-    cohere_api_key=os.getenv("COHERE_API_KEY"),
-    model="command-r-plus-08-2024",
-    temperature=0
-)
+llm_simple = None
+if os.getenv("COHERE_API_KEY"):
+    try:
+        llm_simple = ChatCohere(
+            cohere_api_key=os.getenv("COHERE_API_KEY"),
+            model="command-r-plus-08-2024",
+            temperature=0,
+        )
+    except Exception as _e:
+        logger.warning(f"Cohere kullanılamıyor: {_e}")
+
 
 # max_retries=0 on every chain member: providers send Retry-After headers
-# (Cerebras: 60s) and the SDKs sleep on them before retrying — one in-SDK
-# retry can stall a request a full minute. Failover *is* our retry.
-llm_complex = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),
-    model="llama-3.3-70b-versatile",
-    temperature=0,
-    max_retries=0,
-    request_timeout=30,
-)
+# and the SDKs may otherwise wait before retrying.
+llm_complex = None
+if os.getenv("GROQ_API_KEY"):
+    try:
+        llm_complex = ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_retries=0,
+            request_timeout=30,
+        )
+    except Exception as _e:
+        logger.warning(f"Groq kullanılamıyor: {_e}")
 
 # Gemini — primary for simple questions when a key is present. Optional:
 # without GOOGLE_API_KEY the chain simply doesn't include it.
